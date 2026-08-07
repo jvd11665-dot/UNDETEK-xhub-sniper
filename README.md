@@ -1,30 +1,27 @@
 ﻿# UNDETEK xhub — Sniper Duels
 
 Standalone script · No hub · No key.
-PlaceId `109397169461300` · **v6.2**
+PlaceId `109397169461300` · **v7.1**
 
 [-- UNDETEK xhub Supported Games --]
 [+] Sniper Duels
 
-[-- Features (v6.2) --]
+[-- Features (v7.1) --]
 [+] Boot : Start Safe Script | Start Rage Script
-[+] **360° au MAX + FIABLE** — acquire + hardLock chaque frame, tir 1 frame (~0ms),
-    hysteresis LOS 0.45s (ne lâche plus la cible sur micro-perte de vue) — RAGE
-[+] **0ms** — smoothing 0 · cooldown 0 · fireDelay 0 · FOV aim/trig 999
+[+] **1er tir aim-first HARD** — frames≥5 **ET** 100ms **ET** angle≤2° (AND, tous chemins fire)
+[+] **Dodge MAX** — interval 0.14s · velocity burst + Shift+Ctrl+strafe double-pulse · threat 0.7
+[+] **Wall check dodge** — dodge seulement si LOS claire (head→head), sinon skip
+[+] **360° RAGE** — acquire + hardLock chaque frame · FOV stable · auto-slide
+[+] **0ms fire** après le gate aim-first · smoothing 0 · cooldown 0 · FOV aim/trig 999
 [+] **ANTI-FREEZE** — filtre LOS stable + budget raycast/frame + cache peek/vis
-[+] **FOV Wipe Parts (BETA) v6.2** — hide **temporaire** (pas Destroy) · réapparition
-    après `wipeRespawnSec` (défaut **8s**, cycle 5/8/12/20) · anti collision fantôme
-    (CanCollide/CanTouch/CanQuery=false avant hide) · FOV wipe séparé (90 px / 40 studs)
-[+] **Anti fall-through** — ne touche jamais Baseplate/Terrain/sol/route/map/grass,
-    plaques plates larges, ni parts max-axe ≥ 25 · BasePart only + batch + cap concurrent
-[+] **ADS instant** (Aiming remote + HumAttr + FOV snap — skip le ~1s scope jeu)
-[+] Grosse IA cible (part visible tête>torse>HRP · HP bas · menace · plus proche)
-[+] Tir VIM + mouse1click · firing failsafe 0.15s · sticky hysteresis
-[+] Mode Safe (FOV humanisé) / Rage (360 MAX) + Predict + range track
+[+] **ADS instant** (Aiming remote + HumAttr + FOV snap)
+[+] Grosse IA cible (tête>torse·HRP · HP bas · menace · plus proche)
+[+] Tir VIM + mouse1click · firing failsafe · sticky hysteresis
+[+] Mode Safe (FOV humanisé) / Rage (360) + Predict + range track
 [+] ESP (box / nom / vie) · UI blanche compacte · RightShift · UNLOAD
 
 [-- Honest limits --]
-[-] FOV Wipe = BETA — parts props uniquement (jamais Model / sol / gros structurels)
+[-] Dodge = best-effort client (pas d'invulnérabilité serveur)
 [-] ADS instant = attempt client (remote Aiming). Anim Viewmodel / gate serveur peuvent rester
 [-] Cam libre = optionnel, moins fiable ; défaut = lock continu
 [-] Pas de Silent Aim / Kill Aura / Spinbot (chemins instables ou trop flag)
