@@ -7,8 +7,15 @@
     UI blanche compacte, RightShift.
     100% standalone (no hub / no HttpGet), executor Xeno.
 
-    VERSION: 3.5 (2026-08-07)
+    VERSION: 3.6 (2026-08-07)
     CIBLE: Roblox "Sniper Duels" (place 109397169461300) • Executor: Xeno
+
+    v3.6 — FIX 360 Auto (flick trop court + LOS derriere):
+      * flickFire: hold snap 2–3 RenderStepped + ~60ms AVANT restoreCam
+      * full360 LOS = ray Head/HRP local -> tete ennemi (pas ViewportPoint)
+      * getBestTarget360: score distance 3D only (scan sphere, aucun filtre FOV)
+      * Hold hardLock pendant fenetre de tir; toast 1er tir + DBG optionnel
+      * Safe/Rage: aim+trig+full360 toujours ON au Start
 
     v3.5 — 360 Auto · cam libre · tir auto (Safe + Rage):
       * CFG.full360 ON: acquisition sphere 360 (ignore aimFov/trigFov)
@@ -61,7 +68,7 @@ local Camera = Workspace.CurrentCamera
 -- FOV camera forcee a 120 deg (max Roblox) au lancement — non reglable menu
 local FIXED_FOV = 120
 
-local VERSION = "3.5"
+local VERSION = "3.6"
 
 ----------------------------------------------------------------------
 -- CONFIG (RAGE defaults — appliques apres choix boot; combat OFF tant que pas choisi)
@@ -238,6 +245,8 @@ local State = {
     bootReady     = false,
     -- 360 Auto: cam libre (pas de lock continu) — flick uniquement au tir
     freeCam       = true,
+    -- toast une seule fois au 1er tir 360 reussi
+    first360FireToast = false,
     -- humanize SAFE (look only — fire window = exact head/predict)
     humPxOff      = Vector2.zero,
     humPxTarget   = Vector2.zero,
@@ -587,15 +596,30 @@ local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 rayParams.IgnoreWater = true
 
+-- full360: LOS depuis Head/HRP local (ennemis derriere OK). Sinon: camera.
+local function losOrigin()
+    if CFG.full360 then
+        local char = LocalPlayer.Character
+        if char then
+            local head = char:FindFirstChild("Head")
+            if head and head:IsA("BasePart") then return head.Position end
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if hrp and hrp:IsA("BasePart") then return hrp.Position end
+        end
+    end
+    Camera = Workspace.CurrentCamera
+    return Camera and Camera.CFrame.Position or Vector3.zero
+end
+
 local function isVisible(part, worldPos, t)
     if not CFG.visibleOnly then return true end
     if not part or not part.Parent then return false end
     worldPos = worldPos or aimWorldPos(t, part) or part.Position
+    local origin = losOrigin()
     if CFG.predEnabled then
         local model = modelOf(t, part)
         local tr = model and State.predTrack[model]
         if tr and tr.vel.Magnitude > 2 then
-            local origin = Camera.CFrame.Position
             local dir = worldPos - origin
             if dir.Magnitude < 0.01 then return true end
             rayParams.FilterDescendantsInstances = getRayFilter()
@@ -603,19 +627,21 @@ local function isVisible(part, worldPos, t)
             return (not ok) or res == nil
         end
     end
+    -- full360: pas de cache ecran-dependant — LOS corps peut changer vite en rotation
     local now = tick()
-    local c = State.visCache[part]
-    if c and (now - c.t) < State.visCacheTTL then return c.ok end
-    local origin = Camera.CFrame.Position
+    if not CFG.full360 then
+        local c = State.visCache[part]
+        if c and (now - c.t) < State.visCacheTTL then return c.ok end
+    end
     local dir = worldPos - origin
     if dir.Magnitude < 0.01 then
-        State.visCache[part] = { t = now, ok = true }
+        if not CFG.full360 then State.visCache[part] = { t = now, ok = true } end
         return true
     end
     rayParams.FilterDescendantsInstances = getRayFilter()
     local ok, res = pcall(function() return Workspace:Raycast(origin, dir, rayParams) end)
     local vis = (not ok) or res == nil
-    State.visCache[part] = { t = now, ok = vis }
+    if not CFG.full360 then State.visCache[part] = { t = now, ok = vis } end
     return vis
 end
 
@@ -655,14 +681,12 @@ local function acquireTarget(fov, needVisible)
     return best, bestPart
 end
 
--- 360: meilleure menace dans la sphere (ignore FOV ecran / yaw).
--- Score = distance 3D (plus proche) + leger bonus face-cam (threat).
+-- 360: scan TOUS les joueurs dans la sphere. Score = distance 3D ONLY.
+-- Aucun FOV / ViewportPoint / facing — derriere = eligible si LOS corps.
 local function getBestTarget360(needVisible)
     if needVisible == nil then needVisible = true end
-    local best, bestPart, bestScore = nil, nil, math.huge
+    local best, bestPart, bestDist = nil, nil, math.huge
     local mr = myRootPart()
-    local camPos = Camera and Camera.CFrame.Position
-    local look = Camera and Camera.CFrame.LookVector
     for _, t in ipairs(collectTargets(false)) do
         if not (CFG.teamCheck and t.sameTeam) then
             local part = aimPartOf(t)
@@ -672,23 +696,10 @@ local function getBestTarget360(needVisible)
                     local d3 = mr and (ap - mr.Position).Magnitude or math.huge
                     if d3 <= maxDist() then
                         local vis = (not needVisible) or isVisible(part, ap, t)
-                        if vis then
-                            local score = d3
-                            if camPos and look then
-                                local dir = ap - camPos
-                                if dir.Magnitude > 0.05 then
-                                    local facing = look:Dot(dir.Unit)
-                                    -- leger preferentiel devant, mais derriere reste eligible
-                                    if facing > 0 then
-                                        score = score - facing * 4
-                                    end
-                                end
-                            end
-                            if score < bestScore then
-                                bestScore = score
-                                best = t
-                                bestPart = part
-                            end
+                        if vis and d3 < bestDist then
+                            bestDist = d3
+                            best = t
+                            bestPart = part
                         end
                     end
                 end
@@ -1091,8 +1102,26 @@ local function doFire()
 end
 
 -- Micro-flick no-hook (360 / freeCam):
--- save cam -> snap aimFirePos -> fire sync -> restore immediat (pcall).
--- Joueur voit cam normale; balle part pendant le flick 1 frame.
+-- save cam -> snap aimFirePos -> HOLD 2–3 frames + ~60ms -> fire pendant snap -> restore.
+-- CRITICAL: restore trop tot = raycast jeu utilise look restaure -> miss / "marche pas".
+local function dbg360(msg)
+    if typeof(getgenv) == "function" and getgenv().UNDETEK_SNIPER_DBG then
+        warn("[UNDETEK] " .. tostring(msg))
+    end
+end
+
+local function notifyFirst360Fire(name)
+    if State.first360FireToast then return end
+    State.first360FireToast = true
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = "UNDETEK 360 OK",
+            Text = "Tir auto: " .. tostring(name or "?") .. " — flick hold OK",
+            Duration = 4,
+        })
+    end)
+end
+
 local function flickFire(t, part)
     if State.firing then return false end
     if (tick() - State.lastFire) < CFG.trigCooldown then return false end
@@ -1109,65 +1138,112 @@ local function flickFire(t, part)
     State.lastFire = tick()
     pulseCrouchOnFire()
 
-    local savedCF = Camera.CFrame
-    local restored = false
-    local function restoreCam()
-        if restored then return end
-        restored = true
-        pcall(function()
-            local cam = Workspace.CurrentCamera
-            if cam then cam.CFrame = savedCF end
-        end)
-    end
+    local targetName = (t and t.model and t.model.Name) or "?"
+    dbg360("360 fire " .. targetName)
 
-    -- Snap exact (0 miss) — pas d'humanize sur le ray
-    pcall(function()
-        Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, pos)
-    end)
+    -- Async: NE PAS bloquer BindToRenderStep (sinon deadlock Wait)
+    task.spawn(function()
+        local cam = Workspace.CurrentCamera
+        if not cam then
+            State.firing = false
+            return
+        end
 
-    local ok = false
-    local d = math.clamp(CFG.fireDelay, 0.02, 0.12)
-
-    -- Clic sync pendant le snap (avant restore)
-    if typeof(mouse1click) == "function" then
-        ok = pcall(mouse1click)
-    end
-    if not ok and typeof(mouse1press) == "function" and typeof(mouse1release) == "function" then
-        ok = pcall(mouse1press)
-        task.spawn(function()
-            task.wait(d)
-            pcall(mouse1release)
-        end)
-    end
-    if not ok then
-        local vim
-        pcall(function() vim = game:GetService("VirtualInputManager") end)
-        if vim then
-            local vs = Camera.ViewportSize
-            local mx, my = vs.X / 2, vs.Y / 2
+        local savedCF = cam.CFrame
+        local restored = false
+        local function restoreCam()
+            if restored then return end
+            restored = true
             pcall(function()
-                local mp = UserInputService:GetMouseLocation()
-                if mp then mx, my = mp.X, mp.Y end
-            end)
-            ok = pcall(function()
-                vim:SendMouseButtonEvent(mx, my, 0, true, game, 1)
-            end)
-            task.spawn(function()
-                task.wait(d)
-                pcall(function()
-                    vim:SendMouseButtonEvent(mx, my, 0, false, game, 1)
-                end)
+                local c = Workspace.CurrentCamera
+                if c then c.CFrame = savedCF end
             end)
         end
-    end
 
-    -- Restore immediat — cam libre pour le joueur
-    restoreCam()
+        local function snapNow()
+            local c = Workspace.CurrentCamera
+            if not c then return false end
+            local p = aimFirePos(t, part) or pos
+            if not p then return false end
+            pcall(function()
+                c.CFrame = CFrame.lookAt(c.CFrame.Position, p)
+            end)
+            return true
+        end
 
-    task.spawn(function()
+        -- Hold hardLock pendant toute la fenetre de tir
+        if not snapNow() then
+            State.firing = false
+            return
+        end
+
+        -- 2–3 frames snapped pour que le raycast jeu voie le look
+        RunService.RenderStepped:Wait()
+        snapNow()
+        RunService.RenderStepped:Wait()
+        snapNow()
+
+        local ok = false
+        local d = math.clamp(CFG.fireDelay, 0.02, 0.12)
+
+        -- Clic PENDANT le snap (cam encore lockee)
+        if typeof(mouse1press) == "function" and typeof(mouse1release) == "function" then
+            ok = pcall(mouse1press)
+            if ok then
+                -- hold lock pendant press + delay + 1 frame apres release
+                task.wait(d)
+                snapNow()
+                pcall(mouse1release)
+                RunService.RenderStepped:Wait()
+                snapNow()
+            end
+        end
+        if not ok and typeof(mouse1click) == "function" then
+            ok = pcall(mouse1click)
+            RunService.RenderStepped:Wait()
+            snapNow()
+        end
+        if not ok then
+            local vim
+            pcall(function() vim = game:GetService("VirtualInputManager") end)
+            if vim then
+                local vs = (Workspace.CurrentCamera and Workspace.CurrentCamera.ViewportSize) or Vector2.new(1920, 1080)
+                local mx, my = vs.X / 2, vs.Y / 2
+                pcall(function()
+                    local mp = UserInputService:GetMouseLocation()
+                    if mp then mx, my = mp.X, mp.Y end
+                end)
+                ok = pcall(function()
+                    vim:SendMouseButtonEvent(mx, my, 0, true, game, 1)
+                end)
+                if ok then
+                    task.wait(d)
+                    snapNow()
+                    pcall(function()
+                        vim:SendMouseButtonEvent(mx, my, 0, false, game, 1)
+                    end)
+                    RunService.RenderStepped:Wait()
+                    snapNow()
+                end
+            end
+        end
+
+        -- Extra hold ~50–80ms: balle / hitreg souvent apres le release
+        local holdUntil = tick() + 0.06
+        while tick() < holdUntil do
+            snapNow()
+            RunService.RenderStepped:Wait()
+        end
+
+        restoreCam()
+
+        if ok then
+            notifyFirst360Fire(targetName)
+        end
+
         task.wait(0.02)
         State.firing = false
-        -- filet de secu si un autre thread a touche la cam
+        -- filet: re-restore si un autre thread a touche
         restoreCam()
     end)
     return true
@@ -1375,9 +1451,11 @@ local function stepEngage()
     local tgt, part
     local free = freeCamActive()
 
-    -- ─── 360 Auto + cam libre: acquire sphere, pas de lock continu ───
+    -- ─── 360 Auto + cam libre: acquire sphere, pas de lock continu entre tirs ───
     if CFG.full360 then
-        if not (CFG.aimEnabled or CFG.trigEnabled) then return end
+        -- Gates: apres Start Safe/Rage aim+trig sont ON; sinon toggle menu
+        if not CFG.aimEnabled and not CFG.trigEnabled then return end
+        -- Force arming: full360 ne depend pas de RMB
         tgt, part = stickyTarget()
         if not part or not part.Parent or not isTargetValid(tgt, part) then
             State.settleLeft = 0
@@ -1385,7 +1463,8 @@ local function stepEngage()
         end
         State.locked = true
         prunePredTrack()
-        -- Cam libre: jamais snapCamera / hardLock entre les tirs
+        -- Cam libre entre tirs: jamais snapCamera continu
+        -- Pendant flickFire: hardLock hold ~60ms (async) puis restore
         State.aligned = true
         if CFG.trigEnabled and State.trigReady and triggerCanFire(tgt, part) then
             flickFire(tgt, part)
@@ -1698,12 +1777,13 @@ local rageBtn = makeBootBtn("Start Rage Script", Color3.fromRGB(230, 190, 175), 
 local bootUnloadBtn = makeBootBtn("Annuler / UNLOAD", Color3.fromRGB(220, 220, 225), 3)
 
 local function applyRagePreset()
-    -- Absolute max aggression — 360 + flick + auto
+    -- Absolute max aggression — 360 + flick hold + auto
     CFG.aimEnabled = true
     CFG.trigEnabled = true
     CFG.espEnabled = true
     CFG.full360 = true
     State.freeCam = true
+    State.first360FireToast = false
     CFG.aimSmoothing = 0
     CFG.aimFov = 999
     CFG.aimReleaseFov = 999
@@ -1739,12 +1819,13 @@ local function applyRagePreset()
 end
 
 local function applySafePreset()
-    -- 360 + cam libre + tir auto · 0 miss sur flick (pas de humanize display)
+    -- 360 + cam libre + tir auto · 0 miss sur flick hold (pas de humanize display)
     CFG.aimEnabled = true
     CFG.trigEnabled = true
     CFG.espEnabled = true
     CFG.full360 = true
     State.freeCam = true
+    State.first360FireToast = false
     CFG.aimSmoothing = 0
     CFG.aimFov = 999
     CFG.aimReleaseFov = 999
@@ -1808,7 +1889,7 @@ local function startScriptMode(mode)
     pcall(function()
         StarterGui:SetCore("SendNotification", {
             Title = "UNDETEK Sniper v" .. VERSION,
-            Text = "360° auto · cam libre · tir auto. RightShift = menu.",
+            Text = "360° FIX: flick hold + LOS corps. RightShift = menu.",
             Duration = 6,
         })
     end)
