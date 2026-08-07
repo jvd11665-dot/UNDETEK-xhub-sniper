@@ -7,8 +7,19 @@
     UI blanche compacte, RightShift.
     100% standalone (no hub / no HttpGet), executor Xeno.
 
-    VERSION: 3.7 (2026-08-07)
+    VERSION: 3.8 (2026-08-07)
     CIBLE: Roblox "Sniper Duels" (place 109397169461300) • Executor: Xeno
+
+    v3.8 — RELIABILITY (trigger/cam/ADS/360 chaque frame):
+      * State.firing failsafe max 0.15s + watchdog 0.4s (plus de flag colle)
+      * full360: skip TOUS gates align/FOV — fire si cible valide + LOS
+      * sticky hysteresis 0.3s (vis flicker ne drop plus la cible)
+      * hardLockCamera CHAQUE frame tant que cible lockee
+      * Camera = CurrentCamera chaque frame (nil = skip once)
+      * ADS Aiming resync throttle tant que lock (pas de desync)
+      * full360 path unique: hardLock + doFire (pas freeCam flick)
+      * Tir: VIM press/release ET mouse1click a chaque fire
+      * settleLeft retire (plus de gate)
 
     v3.7 — INSTANT ADS (visee arme jeu / scope RMB ~1s):
       * Remote CharacterStateReplication.Aiming(true) + HumAttr Aiming
@@ -56,7 +67,7 @@ local Camera = Workspace.CurrentCamera
 local FIXED_FOV = 120
 local ADS_FOV   = 40   -- FOV scope force (client). Jeu tween normalement ~1s.
 
-local VERSION = "3.7"
+local VERSION = "3.8"
 
 ----------------------------------------------------------------------
 -- CONFIG (RAGE defaults — appliques apres choix boot; combat OFF tant que pas choisi)
@@ -210,10 +221,12 @@ local State = {
     currentTarget = nil,  -- model sticky
     lastFire      = 0,
     firing        = false,
+    firingSince   = 0,     -- tick() debut fire window — failsafe 0.15s
     locked        = false, -- une cible est verrouillee
     aligned       = false, -- la camera est alignee sur la tete (sous seuil)
     trigReady     = false, -- cooldown pret
-    settleLeft    = 0,     -- TOUJOURS 0 (pas de settle script)
+    stickyVisOkAt = 0,     -- last sticky LOS OK (hysteresis full360)
+    adsResyncAt   = 0,     -- last Aiming remote refresh while locked
     myTeamTag     = nil,
     renderBound   = false,
     fovCircle     = nil,
@@ -712,6 +725,8 @@ end
 
 -- Cible sticky : garde la meme tant que vivante / dans releaseFov / a portee / visible / pas ally.
 -- full360: ignore releaseFov ecran — garde tant que range + mur + equipe OK.
+-- full360 hysteresis: brief vis fail (0.3s) ne drop PAS la sticky.
+local STICKY_VIS_GRACE = 0.3
 local function stickyTarget()
     if CFG.aimSticky and State.currentTarget then
         local m = State.currentTarget
@@ -734,6 +749,10 @@ local function stickyTarget()
                         if ap and (ap - mr.Position).Magnitude <= maxDist() then
                             if CFG.full360 then
                                 if isVisible(part, ap, t) then
+                                    State.stickyVisOkAt = tick()
+                                    return t, part
+                                elseif (tick() - (State.stickyVisOkAt or 0)) < STICKY_VIS_GRACE then
+                                    -- vis flicker: garder sticky encore un moment
                                     return t, part
                                 end
                             else
@@ -753,6 +772,7 @@ local function stickyTarget()
             end
         end
         State.currentTarget = nil
+        State.stickyVisOkAt = 0
     end
     local t, part
     if CFG.full360 then
@@ -760,7 +780,10 @@ local function stickyTarget()
     else
         t, part = acquireTarget(CFG.aimFov, true)
     end
-    if t then State.currentTarget = t.model end
+    if t then
+        State.currentTarget = t.model
+        State.stickyVisOkAt = tick()
+    end
     return t, part
 end
 
@@ -933,8 +956,10 @@ local function snapCamera(t, part, smoothing)
 end
 
 -- Force look EXACT sur aimFirePos (fenetre de tir Safe + Rage hard-snap)
+-- Appeler CHAQUE frame tant qu'une cible est lockee (surtout full360).
 local function hardLockCamera(t, part)
-    if not part then return end
+    Camera = Workspace.CurrentCamera
+    if not Camera or not part then return end
     local pos = aimFirePos(t, part)
     if not pos then return end
     pcall(function()
@@ -952,7 +977,8 @@ end
 
 -- Angle (deg) vers le point de TIR exact (pas le display humanise)
 local function aimAngleTo(t, part)
-    if not part then return 999 end
+    Camera = Workspace.CurrentCamera
+    if not Camera or not part then return 999 end
     local pos = aimFirePos(t, part)
     if not pos then return 999 end
     local dir = pos - Camera.CFrame.Position
@@ -966,7 +992,8 @@ end
 -- full360: gate ignoree (acquisition sphere).
 local function withinTrigFov(t, part)
     if CFG.full360 then return true end
-    if not part then return false end
+    Camera = Workspace.CurrentCamera
+    if not Camera or not part then return false end
     local pos = aimFirePos(t, part)
     if not pos then return false end
     local sp, on = Camera:WorldToViewportPoint(pos)
@@ -976,14 +1003,25 @@ local function withinTrigFov(t, part)
 end
 
 -- Pret a tirer — gates sur aimFirePos exact (0 miss)
--- full360: pas de FOV / angle gate — le micro-flick aligne au moment du tir
+-- full360: AUCUN gate align/FOV — seulement cible valide + LOS
 local function triggerCanFire(t, part)
     if not isTargetValid(t, part) then return false end
-    if not CFG.full360 and not withinTrigFov(t, part) then return false end
+    if CFG.full360 then
+        local ap = aimFirePos(t, part)
+        if not ap then return false end
+        -- pendant sticky grace, on tire quand meme si part encore valide
+        if CFG.visibleOnly and not isVisible(part, ap, t) then
+            if (tick() - (State.stickyVisOkAt or 0)) >= STICKY_VIS_GRACE then
+                return false
+            end
+        end
+        return true
+    end
+    if not withinTrigFov(t, part) then return false end
     local ap = aimFirePos(t, part)
     if not ap then return false end
     if not isVisible(part, ap, t) then return false end
-    if CFG.trigHardSnap and not CFG.full360 then
+    if CFG.trigHardSnap then
         return aimAngleTo(t, part) <= CFG.alignThreshold
     end
     return true
@@ -1166,8 +1204,21 @@ local function syncGameAds()
     local want = wantGameAds()
     if want then
         setGameAds(true, { synthRmb = (not State.holdingM2) and CFG.autoAdsOnLock })
+        -- Resync Aiming remote tant que lock (throttle) — evite desync sans spam
+        if State.adsHeld and (tick() - (State.adsResyncAt or 0)) >= 0.5 then
+            State.adsResyncAt = tick()
+            aimingRemote(true)
+            setHumAiming(true)
+            pcall(function()
+                Camera = Workspace.CurrentCamera
+                if Camera and CFG.instantAds then
+                    Camera.FieldOfView = CFG.adsFov or ADS_FOV
+                end
+            end)
+        end
     else
         setGameAds(false)
+        State.adsResyncAt = 0
     end
 end
 
@@ -1213,50 +1264,73 @@ local function pulseCrouchOnFire()
     end)
 end
 
--- Auto-fire : mode naturel = clic court ; hard snap = press+release
+-- Fire flag helpers — failsafe pour ne JAMAIS rester bloque
+local FIRE_MAX_SEC = 0.15
+local FIRE_WATCHDOG_SEC = 0.4
+
+local function clearFiring()
+    State.firing = false
+    State.firingSince = 0
+end
+
+local function firingBlocked()
+    if not State.firing then return false end
+    local since = State.firingSince or 0
+    if since <= 0 or (tick() - since) > FIRE_MAX_SEC then
+        clearFiring()
+        return false
+    end
+    return true
+end
+
+-- Auto-fire fiable: VIM press/release ET mouse1click a CHAQUE tir
+-- Ne restore PAS la cam pendant la fenetre de tir (hardLock reste actif)
 local function doFire()
-    if State.firing then return false end
+    if firingBlocked() then return false end
     if (tick() - State.lastFire) < CFG.trigCooldown then return false end
     State.firing = true
+    State.firingSince = tick()
     State.lastFire = tick()
     pulseCrouchOnFire()
     task.spawn(function()
         local d = math.clamp(CFG.fireDelay or 0, 0, 0.25)
-        local ok = false
-        -- Mode naturel : clic instantane en priorite (pas de fireDelay)
-        if not CFG.trigHardSnap and typeof(mouse1click) == "function" then
-            ok = pcall(mouse1click)
-        end
-        if not ok and typeof(mouse1press) == "function" and typeof(mouse1release) == "function" then
-            ok = pcall(function()
-                mouse1press()
-                if d > 0 then task.wait(d) end
-                mouse1release()
+        local cam = Workspace.CurrentCamera
+        local vs = (cam and cam.ViewportSize) or Vector2.new(1920, 1080)
+        local mx, my = vs.X / 2, vs.Y / 2
+        pcall(function()
+            local mp = UserInputService:GetMouseLocation()
+            if mp then mx, my = mp.X, mp.Y end
+        end)
+
+        -- 1) VIM press + release (le plus fiable sur Xeno)
+        local vim
+        pcall(function() vim = game:GetService("VirtualInputManager") end)
+        if vim then
+            pcall(function()
+                vim:SendMouseButtonEvent(mx, my, 0, true, game, 1)
+            end)
+            if d > 0 then task.wait(d) end
+            pcall(function()
+                vim:SendMouseButtonEvent(mx, my, 0, false, game, 1)
             end)
         end
-        if not ok then
-            local vim
-            pcall(function() vim = game:GetService("VirtualInputManager") end)
-            if vim then
-                local vs = Camera.ViewportSize
-                local mx, my = vs.X / 2, vs.Y / 2
-                pcall(function()
-                    local mp = UserInputService:GetMouseLocation()
-                    if mp then mx, my = mp.X, mp.Y end
-                end)
-                -- Pas de jitter: le ray suit la camera deja hard-lockee sur aimFirePos
-                ok = pcall(function()
-                    vim:SendMouseButtonEvent(mx, my, 0, true, game, 1)
-                    if d > 0 then task.wait(d) end
-                    vim:SendMouseButtonEvent(mx, my, 0, false, game, 1)
-                end)
-            end
+
+        -- 2) mouse1press/release si dispo
+        if typeof(mouse1press) == "function" and typeof(mouse1release) == "function" then
+            pcall(mouse1press)
+            if d > 0 then task.wait(d) end
+            pcall(mouse1release)
         end
-        if not ok and typeof(mouse1click) == "function" then
-            ok = pcall(mouse1click)
+
+        -- 3) mouse1click EN PLUS (pas en fallback) — couvre les executors partial
+        if typeof(mouse1click) == "function" then
+            pcall(mouse1click)
         end
-        task.wait(0.01)
-        State.firing = false
+
+        -- Failsafe: never leave firing stuck > FIRE_MAX_SEC
+        local left = FIRE_MAX_SEC - (tick() - (State.firingSince or tick()))
+        if left > 0 then task.wait(math.min(left, 0.05)) end
+        clearFiring()
     end)
     return true
 end
@@ -1283,7 +1357,8 @@ local function notifyFirst360Fire(name)
 end
 
 local function flickFire(t, part)
-    if State.firing then return false end
+    -- freeCam optionnel seulement — path moins fiable; full360 defaut = doFire
+    if firingBlocked() then return false end
     if (tick() - State.lastFire) < CFG.trigCooldown then return false end
     if not isTargetValid(t, part) then return false end
 
@@ -1295,29 +1370,18 @@ local function flickFire(t, part)
     if CFG.visibleOnly and not isVisible(part, pos, t) then return false end
 
     State.firing = true
+    State.firingSince = tick()
     State.lastFire = tick()
     pulseCrouchOnFire()
 
     local targetName = (t and t.model and t.model.Name) or "?"
-    dbg360("360 fire " .. targetName)
+    dbg360("360 flick " .. targetName)
 
-    -- Async: NE PAS bloquer BindToRenderStep (sinon deadlock Wait)
     task.spawn(function()
         local cam = Workspace.CurrentCamera
         if not cam then
-            State.firing = false
+            clearFiring()
             return
-        end
-
-        local savedCF = cam.CFrame
-        local restored = false
-        local function restoreCam()
-            if restored then return end
-            restored = true
-            pcall(function()
-                local c = Workspace.CurrentCamera
-                if c then c.CFrame = savedCF end
-            end)
         end
 
         local function snapNow()
@@ -1331,80 +1395,52 @@ local function flickFire(t, part)
             return true
         end
 
-        -- Hold hardLock pendant toute la fenetre de tir
         if not snapNow() then
-            State.firing = false
+            clearFiring()
             return
         end
 
-        -- 2–3 frames snapped pour que le raycast jeu voie le look
         RunService.RenderStepped:Wait()
         snapNow()
         RunService.RenderStepped:Wait()
         snapNow()
 
-        local ok = false
         local d = math.clamp(CFG.fireDelay or 0, 0, 0.12)
+        local vs = (Workspace.CurrentCamera and Workspace.CurrentCamera.ViewportSize) or Vector2.new(1920, 1080)
+        local mx, my = vs.X / 2, vs.Y / 2
+        pcall(function()
+            local mp = UserInputService:GetMouseLocation()
+            if mp then mx, my = mp.X, mp.Y end
+        end)
 
-        -- Clic PENDANT le snap (cam encore lockee)
-        if typeof(mouse1press) == "function" and typeof(mouse1release) == "function" then
-            ok = pcall(mouse1press)
-            if ok then
-                -- hold lock pendant press + delay + 1 frame apres release
-                if d > 0 then task.wait(d) end
-                snapNow()
-                pcall(mouse1release)
-                RunService.RenderStepped:Wait()
-                snapNow()
-            end
+        local vim
+        pcall(function() vim = game:GetService("VirtualInputManager") end)
+        if vim then
+            pcall(function() vim:SendMouseButtonEvent(mx, my, 0, true, game, 1) end)
+            if d > 0 then task.wait(d) end
+            snapNow()
+            pcall(function() vim:SendMouseButtonEvent(mx, my, 0, false, game, 1) end)
         end
-        if not ok and typeof(mouse1click) == "function" then
-            ok = pcall(mouse1click)
-            RunService.RenderStepped:Wait()
+        if typeof(mouse1press) == "function" and typeof(mouse1release) == "function" then
+            pcall(mouse1press)
+            if d > 0 then task.wait(d) end
+            snapNow()
+            pcall(mouse1release)
+        end
+        if typeof(mouse1click) == "function" then
+            pcall(mouse1click)
             snapNow()
         end
-        if not ok then
-            local vim
-            pcall(function() vim = game:GetService("VirtualInputManager") end)
-            if vim then
-                local vs = (Workspace.CurrentCamera and Workspace.CurrentCamera.ViewportSize) or Vector2.new(1920, 1080)
-                local mx, my = vs.X / 2, vs.Y / 2
-                pcall(function()
-                    local mp = UserInputService:GetMouseLocation()
-                    if mp then mx, my = mp.X, mp.Y end
-                end)
-                ok = pcall(function()
-                    vim:SendMouseButtonEvent(mx, my, 0, true, game, 1)
-                end)
-                if ok then
-                    if d > 0 then task.wait(d) end
-                    snapNow()
-                    pcall(function()
-                        vim:SendMouseButtonEvent(mx, my, 0, false, game, 1)
-                    end)
-                    RunService.RenderStepped:Wait()
-                    snapNow()
-                end
-            end
-        end
 
-        -- Extra hold ~50–80ms: balle / hitreg souvent apres le release
-        local holdUntil = tick() + 0.06
+        -- Hold snap pendant la fenetre — PAS de restore cam (hardLock externe reprend)
+        local holdUntil = tick() + 0.05
         while tick() < holdUntil do
             snapNow()
             RunService.RenderStepped:Wait()
         end
 
-        restoreCam()
-
-        if ok then
-            notifyFirst360Fire(targetName)
-        end
-
-        task.wait(0.02)
-        State.firing = false
-        -- filet: re-restore si un autre thread a touche
-        restoreCam()
+        notifyFirst360Fire(targetName)
+        clearFiring()
     end)
     return true
 end
@@ -1598,6 +1634,15 @@ end
 ----------------------------------------------------------------------
 local function stepEngage()
     if not State.bootReady then return end
+
+    -- Failsafe firing flag (chaque frame)
+    if State.firing then
+        local since = State.firingSince or 0
+        if since <= 0 or (tick() - since) > FIRE_MAX_SEC then
+            clearFiring()
+        end
+    end
+
     if not aimActive() and not CFG.trigEnabled then
         State.locked = false
         syncGameAds()
@@ -1605,7 +1650,7 @@ local function stepEngage()
     end
 
     Camera = Workspace.CurrentCamera
-    if not Camera then return end
+    if not Camera then return end -- nil = skip once, ne desactive rien
 
     State.locked = false
     State.aligned = false
@@ -1615,7 +1660,7 @@ local function stepEngage()
     local tgt, part
     local free = freeCamActive()
 
-    -- ─── 360 Auto: acquire sphere, VISE (hardLock), tir auto ───
+    -- ─── 360 Auto: acquire sphere, VISE (hardLock CHAQUE frame), tir auto ───
     if CFG.full360 then
         if not CFG.aimEnabled and not CFG.trigEnabled then
             syncGameAds()
@@ -1623,42 +1668,40 @@ local function stepEngage()
         end
         tgt, part = stickyTarget()
         if not part or not part.Parent or not isTargetValid(tgt, part) then
-            State.settleLeft = 0
             syncGameAds()
             return
         end
         State.locked = true
-        syncGameAds() -- ADS jeu IMMEDIAT (remote Aiming) — pas d'attente tween ~1s
+        State.aligned = true -- full360: pas de gate align
+        syncGameAds()
         prunePredTrack()
+
+        -- MUST lock cam every frame while target locked (pas seulement wantFire)
+        if not free then
+            hardLockCamera(tgt, part)
+        end
+
+        -- Watchdog: locked + trig ON + pas de tir depuis 0.4s → clear firing + retry
+        if CFG.trigEnabled and (tick() - State.lastFire) >= FIRE_WATCHDOG_SEC then
+            if State.firing then clearFiring() end
+            State.trigReady = true
+        end
 
         local wantFire = CFG.trigEnabled
             and State.trigReady
             and triggerCanFire(tgt, part)
 
-        if free then
-            -- Optionnel: cam libre + micro-flick hold (moins fiable)
-            State.aligned = true
-            if wantFire then
-                flickFire(tgt, part)
-            end
-            return
-        end
-
-        -- DEFAUT: lock camera CONTINU sur aimFirePos (vise vraiment)
-        if wantFire or CFG.aimEnabled then
-            hardLockCamera(tgt, part)
-        end
-        State.aligned = true
-        if CFG.trigHardSnap then
-            State.aligned = aimAngleTo(tgt, part) <= CFG.alignThreshold
-        end
-
         if wantFire then
-            if CFG.trigHardSnap and not State.aligned then return end
-            if doFire() then
-                local name = (tgt and tgt.model and tgt.model.Name) or "?"
-                dbg360("360 lock-fire " .. name)
-                notifyFirst360Fire(name)
+            if free then
+                -- Optionnel "Cam libre": flick (moins fiable)
+                flickFire(tgt, part)
+            else
+                -- DEFAUT fiable: hardLock deja fait + doFire (VIM + mouse1click)
+                if doFire() then
+                    local name = (tgt and tgt.model and tgt.model.Name) or "?"
+                    dbg360("360 lock-fire " .. name)
+                    notifyFirst360Fire(name)
+                end
             end
         end
         return
@@ -1672,7 +1715,6 @@ local function stepEngage()
     end
 
     if not part or not part.Parent or not isTargetValid(tgt, part) then
-        State.settleLeft = 0
         State.humBezierModel = nil
         State.humBezierT = 0
         State.humLastLook = nil
@@ -1681,20 +1723,27 @@ local function stepEngage()
         return
     end
     State.locked = true
-    syncGameAds() -- ADS instant sur acquire (RMB joueur OU auto-lock)
+    syncGameAds()
     prunePredTrack()
+
+    -- Watchdog classique aussi
+    if CFG.trigEnabled and (tick() - State.lastFire) >= FIRE_WATCHDOG_SEC then
+        if State.firing then clearFiring() end
+        State.trigReady = true
+    end
 
     local wantFire = CFG.trigEnabled
         and State.trigReady
         and (not CFG.trigOnlyWhenLocked or armed)
         and triggerCanFire(tgt, part)
 
-    if wantFire then
-        -- Fire window: camera + ray = aimFirePos exact (0 miss, Safe comme Rage)
-        hardLockCamera(tgt, part)
-    elseif armed then
-        -- Entre les tirs: Safe humanise le look, Rage snap agressif
-        snapCamera(tgt, part, CFG.aimSmoothing)
+    -- hardLock chaque frame si wantFire OU armed (cible presente)
+    if wantFire or armed then
+        if wantFire or CFG.trigHardSnap then
+            hardLockCamera(tgt, part)
+        else
+            snapCamera(tgt, part, CFG.aimSmoothing)
+        end
     end
 
     State.aligned = withinTrigFov(tgt, part)
@@ -1702,17 +1751,10 @@ local function stepEngage()
         State.aligned = aimAngleTo(tgt, part) <= CFG.alignThreshold
     end
 
-    if not CFG.trigEnabled then
-        State.settleLeft = 0
-        return
-    end
+    if not CFG.trigEnabled then return end
     if not State.trigReady then return end
     if CFG.trigOnlyWhenLocked and not armed then return end
-
-    if not wantFire then
-        State.settleLeft = 0
-        return
-    end
+    if not wantFire then return end
 
     if CFG.trigHardSnap then
         if aimAngleTo(tgt, part) > CFG.alignThreshold then return end
@@ -1765,7 +1807,6 @@ end)
 State.conns[#State.conns + 1] = UserInputService.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton2 then
         State.holdingM2 = false
-        State.settleLeft = 0
         if State.bootReady then
             syncGameAds() -- garde ADS si 360 lock encore actif
         end
