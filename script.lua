@@ -7,8 +7,16 @@
     UI blanche compacte, RightShift.
     100% standalone (no hub / no HttpGet), executor Xeno.
 
-    VERSION: 3.6 (2026-08-07)
+    VERSION: 3.7 (2026-08-07)
     CIBLE: Roblox "Sniper Duels" (place 109397169461300) • Executor: Xeno
+
+    v3.7 — INSTANT ADS (visee arme jeu / scope RMB ~1s):
+      * Remote CharacterStateReplication.Aiming(true) + HumAttr Aiming
+      * Auto-hold RMB + snap FOV ADS (plus d'attente anim client si possible)
+      * Patch local AimSpeed/ScopeTime sur tool si present
+      * 360: ADS engage des qu'une cible est lockee
+      * HONNETE: anim Viewmodel peut rester; gate serveur = hors controle
+      * fireDelay/settle = 0 (script); aimSmoothing 0 sur hardLock
 
     v3.6 — FIX 360: vise + tir (plus de cam libre cassee):
       * full360: acquire sphere + hardLockCamera CONTINU sur la cible
@@ -16,27 +24,6 @@
       * freeCam OFF par defaut (toggle "Cam libre" optionnel)
       * LOS = ray Head/HRP local (ennemis derriere OK, pas ViewportPoint)
       * getBestTarget360: distance 3D only — Safe/Rage aim+trig+360 ON
-
-    v3.5 — 360 Auto · cam libre · tir auto (Safe + Rage):
-      * CFG.full360 ON: acquisition sphere 360 (ignore aimFov/trigFov)
-      * Cam libre (freeCam): pas de lock continu — look normal joueur
-      * Micro-flick no-hook: save CFrame -> snap aimFirePos 1 frame -> fire -> restore
-      * Auto-fire des qu'une cible valide (range + mur + equipe)
-      * Toggle UI "360 Auto" · default ON Safe et Rage
-
-    v3.4 — Rage FOV / aggro a fond:
-      * aimFov / trigFov / aimReleaseFov = 999 (ecran entier, px)
-      * sticky ON · smooth 0 · cooldown 0 · predict + range track max
-      * Camera FieldOfView 120 (max Roblox) apres Start Rage
-      * Cercle FOV = rayon aim/trig reel (999)
-      * Safe inchange: humanise + 0 miss
-
-    v3.3 — Safe = humanise + 0 miss (aussi fort / mieux que Rage):
-      * Split aimDisplayPos (camera humanisee) vs aimFirePos (tete+predict exact)
-      * Fenetre de tir: camera + gate = aimFirePos (offsets humanize hors ray)
-      * Safe FOV / trigger / predict = niveau Rage (ou +) — plus de nerf
-      * Retire jitter VIM / delay Safe qui faisaient rater
-      * Labels: Safe = humanise · 0 miss · aussi fort | Rage = snap brut
 
     BUILD 100% NO-HOOK (aucun hook executor -> aucun crash sur ce Xeno):
       * Tir = RAYCAST camera. Micro-flick CFrame (pas de Silent Aim hook).
@@ -65,10 +52,11 @@ local StarterGui        = game:GetService("StarterGui")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
--- FOV camera forcee a 120 deg (max Roblox) au lancement — non reglable menu
+-- FOV hip = 120; ADS = snap immediat (skip tween ~1s du jeu si possible)
 local FIXED_FOV = 120
+local ADS_FOV   = 40   -- FOV scope force (client). Jeu tween normalement ~1s.
 
-local VERSION = "3.6"
+local VERSION = "3.7"
 
 ----------------------------------------------------------------------
 -- CONFIG (RAGE defaults — appliques apres choix boot; combat OFF tant que pas choisi)
@@ -90,7 +78,7 @@ local CFG = {
     trigEnabled       = false,  -- active apres boot
     trigFov           = 999,    -- ecran entier (px) — RAGE a fond
     trigCooldown      = 0,      -- min = tir le plus rapide
-    fireDelay         = 0.02,   -- min (clamp code >= 0.02)
+    fireDelay         = 0,      -- 0 = pas d'attente avant tir (snap instant)
     alignThreshold    = 8.0,    -- max (hard snap)
     trigOnlyWhenLocked= false,
     trigHardSnap      = true,   -- RAGE: snap dur avant tir
@@ -142,6 +130,11 @@ local CFG = {
     -- 360 Auto: capture sphere + lock cam continu + tir auto
     full360          = true,  -- ignore FOV cone; range + wall + team
     freeCam          = false, -- OFF = vise vraiment (hardLock continu). ON = flick optionnel
+
+    -- INSTANT ADS (visee arme jeu — pas le smooth aimbot)
+    instantAds       = true,  -- Aiming remote + HumAttr + FOV snap
+    autoAdsOnLock    = true,  -- 360/lock: engager ADS sans attendre RMB joueur
+    adsFov           = 40,    -- FOV scope client instant (si instantAds)
 }
 
 -- La portee cible/aim suit la meme limite que l'ESP (proches uniquement)
@@ -154,7 +147,11 @@ local function applyFixedFov()
         if State.savedFov == nil then
             State.savedFov = Camera.FieldOfView
         end
-        Camera.FieldOfView = FIXED_FOV
+        if State.adsHeld and CFG.instantAds then
+            Camera.FieldOfView = CFG.adsFov or ADS_FOV
+        else
+            Camera.FieldOfView = FIXED_FOV
+        end
     end)
 end
 
@@ -170,8 +167,9 @@ end
 local function enforceFixedFov()
     local cam = Workspace.CurrentCamera
     if not cam or not State.alive then return end
-    if math.abs((cam.FieldOfView or 0) - FIXED_FOV) > 0.05 then
-        pcall(function() cam.FieldOfView = FIXED_FOV end)
+    local want = (State.adsHeld and CFG.instantAds) and (CFG.adsFov or ADS_FOV) or FIXED_FOV
+    if math.abs((cam.FieldOfView or 0) - want) > 0.05 then
+        pcall(function() cam.FieldOfView = want end)
     end
 end
 
@@ -206,14 +204,16 @@ local State = {
     drawings      = {},   -- [model] = {box,name,hp,hpbg,tracer}
     alive         = true,
     holdingM2     = false,
-    m2Since       = 0,      -- tick() du dernier clic droit (animation ADS)
+    m2Since       = 0,      -- tick() du dernier clic droit (ADS jeu)
+    adsHeld       = false, -- notre hold ADS (remote + attr + FOV)
+    adsRmbSynth   = false, -- RMB synthetique (360 auto) — pas le joueur
     currentTarget = nil,  -- model sticky
     lastFire      = 0,
     firing        = false,
     locked        = false, -- une cible est verrouillee
     aligned       = false, -- la camera est alignee sur la tete (sous seuil)
     trigReady     = false, -- cooldown pret
-    settleLeft    = 0,     -- frames a attendre apres hard-snap avant fire
+    settleLeft    = 0,     -- TOUJOURS 0 (pas de settle script)
     myTeamTag     = nil,
     renderBound   = false,
     fovCircle     = nil,
@@ -1012,6 +1012,165 @@ local function crouchRemote(on)
     end
 end
 
+-- ADS jeu: CharacterStateReplication.Aiming (meme pattern que Crouching)
+local function aimingRemote(on)
+    local folder = getCSR()
+    if not folder then return end
+    local rem = folder:FindFirstChild("Aiming")
+    if rem and rem:IsA("RemoteEvent") then
+        pcall(function() rem:FireServer(on and true or false) end)
+    end
+end
+
+local function setHumAiming(on)
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    pcall(function() hum:SetAttribute("Aiming", on and true or false) end)
+end
+
+-- Patch client: AimSpeed / ScopeTime / Ads* sur tool equipe (si NumberValue/Attribute)
+local function patchToolAimSpeed()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local tool = char:FindFirstChildOfClass("Tool")
+    if not tool then return end
+    local names = {
+        AimSpeed = true, ScopeTime = true, AdsSpeed = true, AdsTime = true,
+        AimTime = true, ScopeSpeed = true, AimInTime = true, ZoomTime = true,
+    }
+    pcall(function()
+        for _, d in ipairs(tool:GetDescendants()) do
+            local n = d.Name
+            if names[n] then
+                if d:IsA("NumberValue") or d:IsA("IntValue") then
+                    -- AimSpeed eleve = plus rapide; Time -> 0
+                    if n:find("Speed") then
+                        d.Value = math.max(d.Value, 99)
+                    else
+                        d.Value = 0
+                    end
+                elseif d:IsA("NumberValue") == false and d.GetAttribute then
+                    -- no-op
+                end
+            end
+        end
+        for attrName, _ in pairs(names) do
+            local v = tool:GetAttribute(attrName)
+            if typeof(v) == "number" then
+                if attrName:find("Speed") then
+                    tool:SetAttribute(attrName, 99)
+                else
+                    tool:SetAttribute(attrName, 0)
+                end
+            end
+        end
+    end)
+end
+
+local function rmbSynth(on)
+    if on then
+        if State.adsRmbSynth then return end
+        State.adsRmbSynth = true
+        if typeof(mouse2press) == "function" then
+            pcall(mouse2press)
+        else
+            local vim
+            pcall(function() vim = game:GetService("VirtualInputManager") end)
+            if vim then
+                local vs = Camera and Camera.ViewportSize or Vector2.new(1920, 1080)
+                local mx, my = vs.X / 2, vs.Y / 2
+                pcall(function()
+                    local mp = UserInputService:GetMouseLocation()
+                    if mp then mx, my = mp.X, mp.Y end
+                end)
+                pcall(function() vim:SendMouseButtonEvent(mx, my, 1, true, game, 1) end)
+            end
+        end
+    else
+        if not State.adsRmbSynth then return end
+        State.adsRmbSynth = false
+        if typeof(mouse2release) == "function" then
+            pcall(mouse2release)
+        else
+            local vim
+            pcall(function() vim = game:GetService("VirtualInputManager") end)
+            if vim then
+                local vs = Camera and Camera.ViewportSize or Vector2.new(1920, 1080)
+                local mx, my = vs.X / 2, vs.Y / 2
+                pcall(function()
+                    local mp = UserInputService:GetMouseLocation()
+                    if mp then mx, my = mp.X, mp.Y end
+                end)
+                pcall(function() vim:SendMouseButtonEvent(mx, my, 1, false, game, 1) end)
+            end
+        end
+    end
+end
+
+-- Engage / release ADS jeu (instant — pas d'attente tween ~1s)
+local function setGameAds(on, opts)
+    opts = opts or {}
+    on = on and true or false
+    if not CFG.instantAds and on then
+        -- mode off: ne force rien (laisse le jeu)
+        return
+    end
+    if State.adsHeld == on and not opts.force then
+        return
+    end
+    State.adsHeld = on
+    aimingRemote(on)
+    setHumAiming(on)
+    if on then
+        patchToolAimSpeed()
+        -- FOV scope SNAP (bypass tween client)
+        pcall(function()
+            Camera = Workspace.CurrentCamera
+            if Camera then Camera.FieldOfView = CFG.adsFov or ADS_FOV end
+        end)
+        if opts.synthRmb then
+            rmbSynth(true)
+        end
+        -- Mobile Aim button (si present)
+        pcall(function()
+            local pg = LocalPlayer:FindFirstChild("PlayerGui")
+            local btn = pg and pg:FindFirstChild("MobileControls", true)
+            btn = btn and btn:FindFirstChild("Gun", true)
+            btn = btn and btn:FindFirstChild("Aim", true)
+            if btn and btn:IsA("GuiButton") then
+                -- fires Activated if supported
+                if typeof(firesignal) == "function" then
+                    pcall(firesignal, btn.Activated)
+                end
+            end
+        end)
+    else
+        rmbSynth(false)
+        pcall(function()
+            Camera = Workspace.CurrentCamera
+            if Camera then Camera.FieldOfView = FIXED_FOV end
+        end)
+    end
+end
+
+local function wantGameAds()
+    if not CFG.instantAds then return false end
+    if State.holdingM2 then return true end
+    if CFG.autoAdsOnLock and State.bootReady and State.locked then return true end
+    return false
+end
+
+local function syncGameAds()
+    if not State.bootReady then return end
+    local want = wantGameAds()
+    if want then
+        setGameAds(true, { synthRmb = (not State.holdingM2) and CFG.autoAdsOnLock })
+    else
+        setGameAds(false)
+    end
+end
+
 local function crouchKey(on)
     local vim
     pcall(function() vim = game:GetService("VirtualInputManager") end)
@@ -1062,7 +1221,7 @@ local function doFire()
     State.lastFire = tick()
     pulseCrouchOnFire()
     task.spawn(function()
-        local d = math.clamp(CFG.fireDelay, 0.02, 0.25)
+        local d = math.clamp(CFG.fireDelay or 0, 0, 0.25)
         local ok = false
         -- Mode naturel : clic instantane en priorite (pas de fireDelay)
         if not CFG.trigHardSnap and typeof(mouse1click) == "function" then
@@ -1071,7 +1230,7 @@ local function doFire()
         if not ok and typeof(mouse1press) == "function" and typeof(mouse1release) == "function" then
             ok = pcall(function()
                 mouse1press()
-                task.wait(d)
+                if d > 0 then task.wait(d) end
                 mouse1release()
             end)
         end
@@ -1088,7 +1247,7 @@ local function doFire()
                 -- Pas de jitter: le ray suit la camera deja hard-lockee sur aimFirePos
                 ok = pcall(function()
                     vim:SendMouseButtonEvent(mx, my, 0, true, game, 1)
-                    task.wait(d)
+                    if d > 0 then task.wait(d) end
                     vim:SendMouseButtonEvent(mx, my, 0, false, game, 1)
                 end)
             end
@@ -1185,14 +1344,14 @@ local function flickFire(t, part)
         snapNow()
 
         local ok = false
-        local d = math.clamp(CFG.fireDelay, 0.02, 0.12)
+        local d = math.clamp(CFG.fireDelay or 0, 0, 0.12)
 
         -- Clic PENDANT le snap (cam encore lockee)
         if typeof(mouse1press) == "function" and typeof(mouse1release) == "function" then
             ok = pcall(mouse1press)
             if ok then
                 -- hold lock pendant press + delay + 1 frame apres release
-                task.wait(d)
+                if d > 0 then task.wait(d) end
                 snapNow()
                 pcall(mouse1release)
                 RunService.RenderStepped:Wait()
@@ -1218,7 +1377,7 @@ local function flickFire(t, part)
                     vim:SendMouseButtonEvent(mx, my, 0, true, game, 1)
                 end)
                 if ok then
-                    task.wait(d)
+                    if d > 0 then task.wait(d) end
                     snapNow()
                     pcall(function()
                         vim:SendMouseButtonEvent(mx, my, 0, false, game, 1)
@@ -1439,7 +1598,11 @@ end
 ----------------------------------------------------------------------
 local function stepEngage()
     if not State.bootReady then return end
-    if not aimActive() and not CFG.trigEnabled then return end
+    if not aimActive() and not CFG.trigEnabled then
+        State.locked = false
+        syncGameAds()
+        return
+    end
 
     Camera = Workspace.CurrentCamera
     if not Camera then return end
@@ -1454,13 +1617,18 @@ local function stepEngage()
 
     -- ─── 360 Auto: acquire sphere, VISE (hardLock), tir auto ───
     if CFG.full360 then
-        if not CFG.aimEnabled and not CFG.trigEnabled then return end
+        if not CFG.aimEnabled and not CFG.trigEnabled then
+            syncGameAds()
+            return
+        end
         tgt, part = stickyTarget()
         if not part or not part.Parent or not isTargetValid(tgt, part) then
             State.settleLeft = 0
+            syncGameAds()
             return
         end
         State.locked = true
+        syncGameAds() -- ADS jeu IMMEDIAT (remote Aiming) — pas d'attente tween ~1s
         prunePredTrack()
 
         local wantFire = CFG.trigEnabled
@@ -1509,9 +1677,11 @@ local function stepEngage()
         State.humBezierT = 0
         State.humLastLook = nil
         State.humOverUntil = 0
+        syncGameAds()
         return
     end
     State.locked = true
+    syncGameAds() -- ADS instant sur acquire (RMB joueur OU auto-lock)
     prunePredTrack()
 
     local wantFire = CFG.trigEnabled
@@ -1586,12 +1756,19 @@ State.conns[#State.conns + 1] = UserInputService.InputBegan:Connect(function(inp
     if input.UserInputType == Enum.UserInputType.MouseButton2 then
         State.holdingM2 = true
         State.m2Since = tick()
+        -- ADS jeu IMMEDIAT au clic droit (skip attente anim ~1s)
+        if State.bootReady and CFG.instantAds then
+            setGameAds(true, { force = true, synthRmb = false })
+        end
     end
 end)
 State.conns[#State.conns + 1] = UserInputService.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton2 then
         State.holdingM2 = false
         State.settleLeft = 0
+        if State.bootReady then
+            syncGameAds() -- garde ADS si 360 lock encore actif
+        end
     end
 end)
 
@@ -1719,6 +1896,8 @@ end
 -- Boutons principaux (actives apres choix Safe/Rage)
 addToggle("360 Auto", "full360")
 addToggle("Cam libre (OFF=vise)", "freeCam")
+addToggle("ADS instant (jeu)", "instantAds")
+addToggle("ADS auto au lock", "autoAdsOnLock")
 addToggle("Aimbot", "aimEnabled")
 addToggle("Trigger", "trigEnabled")
 addToggle("Predict", "predEnabled")
@@ -1778,7 +1957,7 @@ bootSub.Font = Enum.Font.Gotham
 bootSub.TextSize = 9
 bootSub.TextColor3 = UI_TXT_DIM
 bootSub.TextWrapped = true
-bootSub.Text = "SAFE / RAGE · 360° + vise + tir auto"
+bootSub.Text = "SAFE / RAGE · ADS instant + 360° + tir"
 bootSub.Parent = bootGui
 
 local function makeBootBtn(text, bg, order)
@@ -1816,11 +1995,14 @@ local function applyRagePreset()
     CFG.aimSticky = true
     CFG.trigFov = 999
     CFG.trigCooldown = 0
-    CFG.fireDelay = 0.02
+    CFG.fireDelay = 0
     CFG.alignThreshold = 8.0
     CFG.trigHardSnap = true
     CFG.trigSettleFrames = 0
     CFG.trigScopeDelay = 0
+    CFG.instantAds = true
+    CFG.autoAdsOnLock = true
+    CFG.adsFov = 40
     CFG.predEnabled = true
     CFG.predScale = 1.25
     CFG.predExtraMs = 45
@@ -1859,11 +2041,14 @@ local function applySafePreset()
     CFG.aimSticky = true
     CFG.trigFov = 999
     CFG.trigCooldown = 0
-    CFG.fireDelay = 0.02
+    CFG.fireDelay = 0
     CFG.alignThreshold = 8.0
     CFG.trigHardSnap = false
     CFG.trigSettleFrames = 0
     CFG.trigScopeDelay = 0
+    CFG.instantAds = true
+    CFG.autoAdsOnLock = true
+    CFG.adsFov = 40
     CFG.predEnabled = true
     CFG.predScale = 1.15
     CFG.predExtraMs = 40
@@ -1897,14 +2082,14 @@ local function startScriptMode(mode)
     end
     if mode == "safe" then
         applySafePreset()
-        modeBadge.Text = "MODE: SAFE · 360° + vise + tir"
+        modeBadge.Text = "MODE: SAFE · ADS instant · 360°"
         modeBadge.TextColor3 = Color3.fromRGB(40, 120, 70)
-        sub.Text = "v" .. VERSION .. " SAFE - 360° lock cam · tir auto"
+        sub.Text = "v" .. VERSION .. " SAFE - ADS instant · lock · tir auto"
     else
         applyRagePreset()
-        modeBadge.Text = "MODE: RAGE · 360° + vise + tir"
+        modeBadge.Text = "MODE: RAGE · ADS instant · 360°"
         modeBadge.TextColor3 = Color3.fromRGB(160, 70, 50)
-        sub.Text = "v" .. VERSION .. " RAGE - 360° lock cam · tir auto"
+        sub.Text = "v" .. VERSION .. " RAGE - ADS instant · lock · tir auto"
     end
     bootGui.Visible = false
     pcall(function() bootGui:Destroy() end)
@@ -1916,7 +2101,7 @@ local function startScriptMode(mode)
     pcall(function()
         StarterGui:SetCore("SendNotification", {
             Title = "UNDETEK Sniper v" .. VERSION,
-            Text = "360° + vise (lock cam) + tir auto. RightShift = menu.",
+            Text = "ADS instant (Aiming remote) + 360 lock. RightShift = menu.",
             Duration = 6,
         })
     end)
@@ -1968,6 +2153,7 @@ end)
 ----------------------------------------------------------------------
 local function unload()
     State.alive = false
+    pcall(function() setGameAds(false, { force = true }) end)
     if State.crouchHeld then crouchRelease() end
     restoreFixedFov()
     pcall(function() RunService:UnbindFromRenderStep(RENDER_NAME) end)
@@ -2019,7 +2205,7 @@ pcall(function()
     -- FOV 120 applique apres Start Safe/Rage (pas avant le modal)
     StarterGui:SetCore("SendNotification", {
         Title = "UNDETEK Sniper v" .. VERSION,
-        Text = "Choisis Start Safe ou Start Rage · 360° auto.",
+        Text = "Choisis Start Safe ou Start Rage · ADS instant.",
         Duration = 5,
     })
 end)
