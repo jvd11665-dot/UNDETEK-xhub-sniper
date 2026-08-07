@@ -1,21 +1,21 @@
 ﻿# UNDETEK xhub — Sniper Duels
 
 Standalone script · No hub · No key.
-PlaceId `109397169461300` · **v6.0**
+PlaceId `109397169461300` · **v6.1**
 
 [-- UNDETEK xhub Supported Games --]
 [+] Sniper Duels
 
-[-- Features (v6.0) --]
+[-- Features (v6.1) --]
 [+] Boot : Start Safe Script | Start Rage Script
 [+] **360° au MAX + FIABLE** — acquire + hardLock chaque frame, tir 1 frame (~0ms),
     hysteresis LOS 0.45s (ne lâche plus la cible sur micro-perte de vue) — RAGE
-[+] **0ms** — smoothing 0 · cooldown 0 · fireDelay 0 · FOV 999
+[+] **0ms** — smoothing 0 · cooldown 0 · fireDelay 0 · FOV aim/trig 999
 [+] **ANTI-FREEZE** — filtre LOS stable + budget raycast/frame + cache peek/vis
-    (fini les gels ~3s ; plus de reconstruction de liste à chaque ray)
-[+] **FOV Wipe Parts (BETA)** — dissocie + supprime les BaseParts devant la cam
-    (FOV perso + limite en studs · JAMAIS de Model/Tool/Character · batch anti-lag
-    via GetPartBoundsInRadius, pas de GetDescendants du Workspace)
+[+] **FOV Wipe Parts (BETA) v6.1** — FOV wipe **séparé** de aim/trig (défaut 90 px / 40 studs,
+    caps 200 / 100) · boutons cycle menu · cercle orange dédié
+[+] **Anti fall-through** — ne détruit jamais Baseplate/Terrain/sol/route/map/grass,
+    plaques plates larges, ni parts max-axe ≥ 25 · BasePart only + batch
 [+] **ADS instant** (Aiming remote + HumAttr + FOV snap — skip le ~1s scope jeu)
 [+] Grosse IA cible (part visible tête>torse>HRP · HP bas · menace · plus proche)
 [+] Tir VIM + mouse1click · firing failsafe 0.15s · sticky hysteresis
@@ -23,7 +23,7 @@ PlaceId `109397169461300` · **v6.0**
 [+] ESP (box / nom / vie) · UI blanche compacte · RightShift · UNLOAD
 
 [-- Honest limits --]
-[-] FOV Wipe = BETA — parts uniquement (jamais de Model), limité en studs
+[-] FOV Wipe = BETA — parts props uniquement (jamais Model / sol / gros structurels)
 [-] ADS instant = attempt client (remote Aiming). Anim Viewmodel / gate serveur peuvent rester
 [-] Cam libre = optionnel, moins fiable ; défaut = lock continu
 [-] Pas de Silent Aim / Kill Aura / Spinbot (chemins instables ou trop flag)
