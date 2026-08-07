@@ -2142,7 +2142,7 @@ local function startScriptMode(mode)
     pcall(function()
         StarterGui:SetCore("SendNotification", {
             Title = "UNDETEK Sniper v" .. VERSION,
-            Text = "ADS instant (Aiming remote) + 360 lock. RightShift = menu.",
+            Text = "v3.8 fiabilite: lock+tir chaque frame. RightShift = menu.",
             Duration = 6,
         })
     end)
