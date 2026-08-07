@@ -1,4 +1,4 @@
-﻿# UNDETEK xhub - Sniper Duels
+# UNDETEK xhub - Sniper Duels
 
 Free standalone script — open source — non-obfusqué. No hub. No key.
 PlaceId `109397169461300` · **v3.6**
@@ -9,18 +9,17 @@ PlaceId `109397169461300` · **v3.6**
 
 [-- Features --]
 [+] Boot : Start Safe Script | Start Rage Script
-[+] **360° auto · cam libre · tir auto** (Safe + Rage) — **v3.6 FIX**
-[+] Flick hold 2–3 frames + ~60ms (plus de restore trop tôt)
-[+] LOS corps (Head/HRP) — ennemis derrière acquis
-[+] Capture sphere distance-only (pas juste le FOV viseur)
+[+] **360° + vise (lock cam) + tir auto** — **v3.6 FIX**
+[+] Capture sphere autour de toi + hardLock tete continu
+[+] Cam libre OFF par defaut (OFF = vise vraiment)
 [+] Mode Safe / Rage + Predict + range track
 [+] ESP (box / nom / vie · 250 studs)
 [+] UI blanche compacte · RightShift · UNLOAD
 
 [-- Honest limits --]
-[-] Cam libre entre tirs ; hold lock court au moment du tir
-[-] Pas de Silent Aim / Kill Aura (chemins instables retirés)
-[-] Optimisé pour Xeno (standalone)
+[-] 360 lock = camera suit la cible (pas de look libre par defaut)
+[-] Pas de Silent Aim / Kill Aura (chemins instables retires)
+[-] Optimise pour Xeno (standalone)
 
 [-- Suggested Executors --]
 PC: Xeno, Volt, Solara

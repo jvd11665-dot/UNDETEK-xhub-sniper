@@ -3,19 +3,19 @@
     DESCRIPTION: Aimbot camera (no-hook, anti-crash), triggerbot, prediction +
     range track, ESP. Au boot: Start Safe Script | Start Rage Script.
     Safe = visee humanisee, toujours precise (0 miss). Rage = snap brut.
-    360 Auto: capture sphere + cam libre + tir auto (micro-flick).
+    360 Auto: capture sphere + lock cam continu + tir auto (vise vraiment).
     UI blanche compacte, RightShift.
     100% standalone (no hub / no HttpGet), executor Xeno.
 
     VERSION: 3.6 (2026-08-07)
     CIBLE: Roblox "Sniper Duels" (place 109397169461300) • Executor: Xeno
 
-    v3.6 — FIX 360 Auto (flick trop court + LOS derriere):
-      * flickFire: hold snap 2–3 RenderStepped + ~60ms AVANT restoreCam
-      * full360 LOS = ray Head/HRP local -> tete ennemi (pas ViewportPoint)
-      * getBestTarget360: score distance 3D only (scan sphere, aucun filtre FOV)
-      * Hold hardLock pendant fenetre de tir; toast 1er tir + DBG optionnel
-      * Safe/Rage: aim+trig+full360 toujours ON au Start
+    v3.6 — FIX 360: vise + tir (plus de cam libre cassee):
+      * full360: acquire sphere + hardLockCamera CONTINU sur la cible
+      * Auto doFire pendant le lock (pas de flick restore trop tot)
+      * freeCam OFF par defaut (toggle "Cam libre" optionnel)
+      * LOS = ray Head/HRP local (ennemis derriere OK, pas ViewportPoint)
+      * getBestTarget360: distance 3D only — Safe/Rage aim+trig+360 ON
 
     v3.5 — 360 Auto · cam libre · tir auto (Safe + Rage):
       * CFG.full360 ON: acquisition sphere 360 (ignore aimFov/trigFov)
@@ -139,8 +139,9 @@ local CFG = {
     safeBezierSec    = 0.22,  -- duree interpolation Bezier vers cible
     safeOvershootP   = 0.010, -- proba micro-overshoot / frame (look only)
 
-    -- 360 Auto: capture sphere + cam libre + tir auto (micro-flick)
+    -- 360 Auto: capture sphere + lock cam continu + tir auto
     full360          = true,  -- ignore FOV cone; range + wall + team
+    freeCam          = false, -- OFF = vise vraiment (hardLock continu). ON = flick optionnel
 }
 
 -- La portee cible/aim suit la meme limite que l'ESP (proches uniquement)
@@ -243,8 +244,8 @@ local State = {
     -- boot Safe/Rage
     scriptMode    = nil,   -- "safe"|"rage"
     bootReady     = false,
-    -- 360 Auto: cam libre (pas de lock continu) — flick uniquement au tir
-    freeCam       = true,
+    -- 360 Auto: freeCam OFF = lock cam continu (vise vraiment)
+    freeCam       = false,
     -- toast une seule fois au 1er tir 360 reussi
     first360FireToast = false,
     -- humanize SAFE (look only — fire window = exact head/predict)
@@ -1116,7 +1117,7 @@ local function notifyFirst360Fire(name)
     pcall(function()
         StarterGui:SetCore("SendNotification", {
             Title = "UNDETEK 360 OK",
-            Text = "Tir auto: " .. tostring(name or "?") .. " — flick hold OK",
+            Text = "Tir auto: " .. tostring(name or "?") .. " — lock cam OK",
             Duration = 4,
         })
     end)
@@ -1430,11 +1431,11 @@ local function aimActive()
 end
 
 local function freeCamActive()
-    return CFG.full360 and State.freeCam
+    return CFG.full360 and CFG.freeCam
 end
 
 ----------------------------------------------------------------------
--- ENGAGE : 360 = capture + flick auto | sinon clic droit aim+trigger
+-- ENGAGE : 360 = sphere + lock cam + tir auto | sinon FOV + RMB
 ----------------------------------------------------------------------
 local function stepEngage()
     if not State.bootReady then return end
@@ -1451,11 +1452,9 @@ local function stepEngage()
     local tgt, part
     local free = freeCamActive()
 
-    -- ─── 360 Auto + cam libre: acquire sphere, pas de lock continu entre tirs ───
+    -- ─── 360 Auto: acquire sphere, VISE (hardLock), tir auto ───
     if CFG.full360 then
-        -- Gates: apres Start Safe/Rage aim+trig sont ON; sinon toggle menu
         if not CFG.aimEnabled and not CFG.trigEnabled then return end
-        -- Force arming: full360 ne depend pas de RMB
         tgt, part = stickyTarget()
         if not part or not part.Parent or not isTargetValid(tgt, part) then
             State.settleLeft = 0
@@ -1463,11 +1462,36 @@ local function stepEngage()
         end
         State.locked = true
         prunePredTrack()
-        -- Cam libre entre tirs: jamais snapCamera continu
-        -- Pendant flickFire: hardLock hold ~60ms (async) puis restore
+
+        local wantFire = CFG.trigEnabled
+            and State.trigReady
+            and triggerCanFire(tgt, part)
+
+        if free then
+            -- Optionnel: cam libre + micro-flick hold (moins fiable)
+            State.aligned = true
+            if wantFire then
+                flickFire(tgt, part)
+            end
+            return
+        end
+
+        -- DEFAUT: lock camera CONTINU sur aimFirePos (vise vraiment)
+        if wantFire or CFG.aimEnabled then
+            hardLockCamera(tgt, part)
+        end
         State.aligned = true
-        if CFG.trigEnabled and State.trigReady and triggerCanFire(tgt, part) then
-            flickFire(tgt, part)
+        if CFG.trigHardSnap then
+            State.aligned = aimAngleTo(tgt, part) <= CFG.alignThreshold
+        end
+
+        if wantFire then
+            if CFG.trigHardSnap and not State.aligned then return end
+            if doFire() then
+                local name = (tgt and tgt.model and tgt.model.Name) or "?"
+                dbg360("360 lock-fire " .. name)
+                notifyFirst360Fire(name)
+            end
         end
         return
     end
@@ -1498,7 +1522,7 @@ local function stepEngage()
     if wantFire then
         -- Fire window: camera + ray = aimFirePos exact (0 miss, Safe comme Rage)
         hardLockCamera(tgt, part)
-    elseif armed and not free then
+    elseif armed then
         -- Entre les tirs: Safe humanise le look, Rage snap agressif
         snapCamera(tgt, part, CFG.aimSmoothing)
     end
@@ -1680,8 +1704,8 @@ local function addToggle(label, key)
     end
     btn.MouseButton1Click:Connect(function()
         CFG[key] = not CFG[key]
-        if key == "full360" then
-            State.freeCam = CFG.full360
+        if key == "freeCam" then
+            State.freeCam = CFG.freeCam
         end
         if not CFG.espEnabled then for _, d in pairs(State.drawings) do hideEsp(d) end end
         render()
@@ -1694,6 +1718,7 @@ end
 
 -- Boutons principaux (actives apres choix Safe/Rage)
 addToggle("360 Auto", "full360")
+addToggle("Cam libre (OFF=vise)", "freeCam")
 addToggle("Aimbot", "aimEnabled")
 addToggle("Trigger", "trigEnabled")
 addToggle("Predict", "predEnabled")
@@ -1753,7 +1778,7 @@ bootSub.Font = Enum.Font.Gotham
 bootSub.TextSize = 9
 bootSub.TextColor3 = UI_TXT_DIM
 bootSub.TextWrapped = true
-bootSub.Text = "SAFE / RAGE · 360° auto · cam libre · tir auto"
+bootSub.Text = "SAFE / RAGE · 360° + vise + tir auto"
 bootSub.Parent = bootGui
 
 local function makeBootBtn(text, bg, order)
@@ -1777,12 +1802,13 @@ local rageBtn = makeBootBtn("Start Rage Script", Color3.fromRGB(230, 190, 175), 
 local bootUnloadBtn = makeBootBtn("Annuler / UNLOAD", Color3.fromRGB(220, 220, 225), 3)
 
 local function applyRagePreset()
-    -- Absolute max aggression — 360 + flick hold + auto
+    -- Absolute max: 360 sphere + hardLock continu + tir auto
     CFG.aimEnabled = true
     CFG.trigEnabled = true
     CFG.espEnabled = true
     CFG.full360 = true
-    State.freeCam = true
+    CFG.freeCam = false
+    State.freeCam = false
     State.first360FireToast = false
     CFG.aimSmoothing = 0
     CFG.aimFov = 999
@@ -1819,12 +1845,13 @@ local function applyRagePreset()
 end
 
 local function applySafePreset()
-    -- 360 + cam libre + tir auto · 0 miss sur flick hold (pas de humanize display)
+    -- 360 + hardLock continu + tir auto · 0 miss (aimFirePos)
     CFG.aimEnabled = true
     CFG.trigEnabled = true
     CFG.espEnabled = true
     CFG.full360 = true
-    State.freeCam = true
+    CFG.freeCam = false
+    State.freeCam = false
     State.first360FireToast = false
     CFG.aimSmoothing = 0
     CFG.aimFov = 999
@@ -1870,14 +1897,14 @@ local function startScriptMode(mode)
     end
     if mode == "safe" then
         applySafePreset()
-        modeBadge.Text = "MODE: SAFE · 360° auto · cam libre"
+        modeBadge.Text = "MODE: SAFE · 360° + vise + tir"
         modeBadge.TextColor3 = Color3.fromRGB(40, 120, 70)
-        sub.Text = "v" .. VERSION .. " SAFE - 360° auto · cam libre · tir auto"
+        sub.Text = "v" .. VERSION .. " SAFE - 360° lock cam · tir auto"
     else
         applyRagePreset()
-        modeBadge.Text = "MODE: RAGE · 360° auto · cam libre"
+        modeBadge.Text = "MODE: RAGE · 360° + vise + tir"
         modeBadge.TextColor3 = Color3.fromRGB(160, 70, 50)
-        sub.Text = "v" .. VERSION .. " RAGE - 360° auto · cam libre · tir auto"
+        sub.Text = "v" .. VERSION .. " RAGE - 360° lock cam · tir auto"
     end
     bootGui.Visible = false
     pcall(function() bootGui:Destroy() end)
@@ -1889,7 +1916,7 @@ local function startScriptMode(mode)
     pcall(function()
         StarterGui:SetCore("SendNotification", {
             Title = "UNDETEK Sniper v" .. VERSION,
-            Text = "360° FIX: flick hold + LOS corps. RightShift = menu.",
+            Text = "360° + vise (lock cam) + tir auto. RightShift = menu.",
             Duration = 6,
         })
     end)
@@ -1927,7 +1954,7 @@ State.conns[#State.conns + 1] = RunService.Heartbeat:Connect(function()
         elseif State.trigReady then trigTxt = "ready"
         else trigTxt = "cooldown" end
         local modeTxt = State.scriptMode == "safe" and "SAFE" or (State.scriptMode == "rage" and "RAGE" or "?")
-        local camTxt = CFG.full360 and "360" or "FOV"
+        local camTxt = CFG.full360 and (CFG.freeCam and "360flick" or "360lock") or "FOV"
         status.Text = string.format(
             "%s %s E:%d %s\nR:%dm Aim:%s Trig:%s",
             modeTxt, camTxt, n, tgtName, math.floor(State.lastRange + 0.5),
