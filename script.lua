@@ -3,12 +3,23 @@
     DESCRIPTION: Aimbot camera (no-hook, anti-crash), triggerbot, prediction +
     range track, ESP. Au boot: Start Safe Script | Start Rage Script.
     Safe = visee humanisee, toujours precise (0 miss). Rage = snap brut.
-    360 Auto: capture sphere + lock cam continu + tir auto (vise vraiment).
+    CLASSIQUE: aim FOV ecran (pas de 360 derriere-dos), tout au max + grosse IA.
     UI blanche compacte, RightShift.
     100% standalone (no hub / no HttpGet), executor Xeno.
 
-    VERSION: 4.1 (2026-08-07)
+    VERSION: 5.0 (2026-08-07)
     CIBLE: Roblox "Sniper Duels" (place 109397169461300) • Executor: Xeno
+
+    v5.0 — RETOUR CLASSIQUE (comme au debut) + TOUT MAX + GROSSE IA:
+      * PAS de 360 Auto par defaut (full360 = false) — acquisition FOV ecran
+        (WorldToViewport, cible visible a l'ecran, jamais derriere le dos)
+      * aimAlways = true — aim/trigger armes en continu (style hub "tout ON"),
+        plus besoin de tenir clic droit (M2 marche toujours pour ADS jeu)
+      * PAS de freeCam / flickFire en engage normal — hardLock cam classique
+      * aimFov / trigFov / release = 999 (ecran entier), smoothing 0, cd 0
+      * Garde toute l'IA + fixes: pickTargetAI scoring, aim-first, peek wall,
+        firing failsafe, sticky hysteresis, hardLock/frame, VIM+click, ADS
+      * 360 Auto reste dispo en toggle mais OFF par defaut (Safe + Rage)
 
     v4.1 — TOUT AU MAX + GROSSE IA (cerveau cible):
       * pickTargetAI(): scoring multi-critere au lieu du simple plus-proche
@@ -55,7 +66,7 @@ local Camera = Workspace.CurrentCamera
 local FIXED_FOV = 120
 local ADS_FOV   = 40   -- FOV scope force (client). Jeu tween normalement ~1s.
 
-local VERSION = "4.1"
+local VERSION = "5.0"
 
 -- Aim-first gate (jamais tir le frame d'acquire)
 local LOCK_AIM_DEG    = 2.5   -- deg: vise deja sur hitbox
@@ -65,10 +76,10 @@ local LOCK_MIN_FRAMES = 2     -- hardLock frames avant 1er tir
 -- CONFIG (RAGE defaults — appliques apres choix boot; combat OFF tant que pas choisi)
 ----------------------------------------------------------------------
 local CFG = {
-    -- AIMBOT camera (no-hook) — defaults MAX (RAGE)
+    -- AIMBOT camera (no-hook) — defaults MAX (CLASSIQUE: aimAlways ON)
     aimEnabled     = false,   -- active apres Start Safe/Rage
-    aimAlways      = false,
-    aimHoldMouse2  = true,
+    aimAlways      = true,    -- CLASSIQUE "tout ON" — arme en continu (pas besoin M2)
+    aimHoldMouse2  = true,    -- M2 marche toujours (ADS jeu) mais pas requis
     aimSmoothing   = 0,       -- 0 = snap max (reactif) — RAGE
     aimFov         = 999,     -- ecran entier (px) — RAGE a fond
     aimReleaseFov  = 999,     -- sticky = meme plafond
@@ -130,8 +141,8 @@ local CFG = {
     safeBezierSec    = 0.22,  -- duree interpolation Bezier vers cible
     safeOvershootP   = 0.010, -- proba micro-overshoot / frame (look only)
 
-    -- 360 Auto: capture sphere + lock cam continu + tir auto
-    full360          = true,  -- ignore FOV cone; range + wall + team
+    -- 360 Auto: OFF par defaut (CLASSIQUE). Toggle dispo si voulu.
+    full360          = false, -- CLASSIQUE: acquisition FOV ecran (pas derriere-dos)
     freeCam          = false, -- OFF = vise vraiment (hardLock continu). ON = flick optionnel
 
     -- INSTANT ADS (visee arme jeu — pas le smooth aimbot)
@@ -2030,7 +2041,7 @@ sub.BackgroundTransparency = 1
 sub.Font = Enum.Font.Gotham
 sub.TextSize = UI_TEXT
 sub.TextColor3 = UI_TXT_DIM
-sub.Text = "v" .. VERSION .. " · IA · aim-first · peek"
+sub.Text = "v" .. VERSION .. " · classique · IA · aim-first"
 sub.Parent = frame
 
 local modeBadge = Instance.new("TextLabel")
@@ -2085,18 +2096,19 @@ local function addToggle(label, key)
     return btn
 end
 
--- Boutons principaux (actives apres choix Safe/Rage)
-addToggle("360 Auto", "full360")
-addToggle("Cam libre (OFF=vise)", "freeCam")
-addToggle("ADS instant (jeu)", "instantAds")
-addToggle("ADS auto au lock", "autoAdsOnLock")
+-- Boutons principaux (actives apres choix Safe/Rage) — CLASSIQUE en tete
 addToggle("Aimbot", "aimEnabled")
 addToggle("Trigger", "trigEnabled")
+addToggle("ESP", "espEnabled")
 addToggle("Predict", "predEnabled")
 addToggle("Mur (peek OK)", "visibleOnly")
 addToggle("Equipe A/B", "teamCheck")
-addToggle("ESP", "espEnabled")
+addToggle("ADS instant (jeu)", "instantAds")
+addToggle("ADS auto au lock", "autoAdsOnLock")
 addToggle("Cercle FOV", "showFovCircle")
+-- Options avancees (OFF par defaut — classique sans 360)
+addToggle("360 Auto (avance, OFF)", "full360")
+addToggle("Cam libre (OFF=vise)", "freeCam")
 
 local unloadBtn = Instance.new("TextButton")
 unloadBtn.Size = UDim2.new(1, 0, 0, 18)
@@ -2149,7 +2161,7 @@ bootSub.Font = Enum.Font.Gotham
 bootSub.TextSize = 9
 bootSub.TextColor3 = UI_TXT_DIM
 bootSub.TextWrapped = true
-bootSub.Text = "SAFE / RAGE · grosse IA + aim-first + peek"
+bootSub.Text = "SAFE / RAGE · classique (sans 360) · grosse IA + aim-first"
 bootSub.Parent = bootGui
 
 local function makeBootBtn(text, bg, order)
@@ -2173,14 +2185,16 @@ local rageBtn = makeBootBtn("Start Rage Script", Color3.fromRGB(230, 190, 175), 
 local bootUnloadBtn = makeBootBtn("Annuler / UNLOAD", Color3.fromRGB(220, 220, 225), 3)
 
 local function applyRagePreset()
-    -- Absolute max: 360 sphere + hardLock continu + tir auto
+    -- CLASSIQUE MAX: aim FOV ecran + hardLock continu + tir auto (snap brut)
     CFG.aimEnabled = true
     CFG.trigEnabled = true
     CFG.espEnabled = true
-    CFG.full360 = true
+    CFG.full360 = false      -- CLASSIQUE: pas de 360 derriere-dos
     CFG.freeCam = false
     State.freeCam = false
     State.first360FireToast = false
+    CFG.aimAlways = true     -- "tout ON a fond" — arme en continu
+    CFG.aimHoldMouse2 = true
     CFG.aimSmoothing = 0
     CFG.aimFov = 999
     CFG.aimReleaseFov = 999
@@ -2221,14 +2235,16 @@ local function applyRagePreset()
 end
 
 local function applySafePreset()
-    -- 360 + hardLock continu + tir auto · 0 miss (aimFirePos)
+    -- CLASSIQUE: aim FOV ecran + hardLock continu + tir auto · 0 miss (aimFirePos)
     CFG.aimEnabled = true
     CFG.trigEnabled = true
     CFG.espEnabled = true
-    CFG.full360 = true
+    CFG.full360 = false      -- CLASSIQUE: pas de 360 derriere-dos
     CFG.freeCam = false
     State.freeCam = false
     State.first360FireToast = false
+    CFG.aimAlways = true     -- "tout ON" — arme en continu
+    CFG.aimHoldMouse2 = true
     CFG.aimSmoothing = 0
     CFG.aimFov = 999
     CFG.aimReleaseFov = 999
@@ -2278,14 +2294,14 @@ local function startScriptMode(mode)
     end
     if mode == "safe" then
         applySafePreset()
-        modeBadge.Text = "MODE: SAFE · IA · aim-first · peek"
+        modeBadge.Text = "MODE: SAFE · classique · IA · aim-first"
         modeBadge.TextColor3 = Color3.fromRGB(40, 120, 70)
-        sub.Text = "v" .. VERSION .. " SAFE · IA · aim-first"
+        sub.Text = "v" .. VERSION .. " SAFE · classique · IA"
     else
         applyRagePreset()
-        modeBadge.Text = "MODE: RAGE · IA · aim-first · peek"
+        modeBadge.Text = "MODE: RAGE · classique · IA · aim-first"
         modeBadge.TextColor3 = Color3.fromRGB(160, 70, 50)
-        sub.Text = "v" .. VERSION .. " RAGE · IA · aim-first"
+        sub.Text = "v" .. VERSION .. " RAGE · classique · IA"
     end
     bootGui.Visible = false
     pcall(function() bootGui:Destroy() end)
@@ -2297,7 +2313,7 @@ local function startScriptMode(mode)
     pcall(function()
         StarterGui:SetCore("SendNotification", {
             Title = "UNDETEK Sniper v" .. VERSION,
-            Text = "v4.1 tout au max + grosse IA. RightShift = menu.",
+            Text = "v5.0 classique (sans 360) tout au max + grosse IA. RightShift = menu.",
             Duration = 5,
         })
     end)
