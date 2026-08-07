@@ -2,24 +2,31 @@
     TITRE: UNDETEK xhub — Sniper Duels
     DESCRIPTION: Aimbot camera (no-hook, anti-crash), triggerbot, prediction +
     range track, ESP. Au boot: Start Safe Script | Start Rage Script.
-    Safe = visée plus naturelle. Rage = agressif.
+    Safe = visee humanisee, toujours precise (0 miss). Rage = snap brut.
     UI blanche compacte, RightShift.
     100% standalone (no hub / no HttpGet), executor Xeno.
 
-    VERSION: 3.2 (2026-08-07)
+    VERSION: 3.3 (2026-08-07)
     CIBLE: Roblox "Sniper Duels" (place 109397169461300) • Executor: Xeno
+
+    v3.3 — Safe = humanise + 0 miss (aussi fort / mieux que Rage):
+      * Split aimDisplayPos (camera humanisee) vs aimFirePos (tete+predict exact)
+      * Fenetre de tir: camera + gate = aimFirePos (offsets humanize hors ray)
+      * Safe FOV / trigger / predict = niveau Rage (ou +) — plus de nerf
+      * Retire jitter VIM / delay Safe qui faisaient rater
+      * Labels: Safe = humanise · 0 miss · aussi fort | Rage = snap brut
 
     v3.2 — Improve-loop:
       * FOV circle sync mode (Safe/Rage) + rayon aim vs trig reel
       * Trigger FOV gate sur pos stable (plus de flicker Safe)
       * Sticky anti-ally · overshoot pull-back · aim micro-refresh
       * Boot: FOV 120 apres choix mode · anti double-GUI · unload boot modal
-      * SAFE fire jitter VIM · labels FR · Cercle FOV toggle · Annuler/UNLOAD boot
+      * labels FR · Cercle FOV toggle · Annuler/UNLOAD boot
 
     v3.1 — Boot Safe vs Rage:
       * Modal 2 boutons avant features combat.
       * getgenv().UNDETEK_SNIPER_MODE = "safe"|"rage"
-      * Safe = visée plus naturelle · Rage = agressif (comportement v3.0).
+      * Safe = visee humanisee · Rage = agressif (comportement v3.0).
 
     v3.0 — 3eme personne SUPPRIMEE. UI BLANCHE compacte "UNDETEK xhub" (boutons
       only, sans slider/emoji). Tout ON a fond par defaut (Aim/Trigger/Predict/
@@ -78,7 +85,7 @@ local Camera = Workspace.CurrentCamera
 -- FOV camera forcee a 120 deg (max Roblox) au lancement — non reglable menu
 local FIXED_FOV = 120
 
-local VERSION = "3.2"
+local VERSION = "3.3"
 
 ----------------------------------------------------------------------
 -- CONFIG (RAGE defaults — appliques apres choix boot; combat OFF tant que pas choisi)
@@ -141,13 +148,13 @@ local CFG = {
     crouchOnFire     = true,
     crouchFireSec    = 1.0,   -- duree accroupi apres chaque tir trigger
 
-    -- SAFE humanize (humanized / harder to flag, not magic — PAS 100% undetect)
-    safeGaussStuds   = 0.055, -- ecart-type bruit monde (tete jamais pile centre)
-    safePxMin        = 2,     -- drift pixels L/R (et leger U/D)
-    safePxMax        = 8,
-    safeSmoothTime   = 0.20,  -- expo / cinematographique (secondes)
-    safeBezierSec    = 0.28,  -- duree interpolation Bezier vers cible
-    safeOvershootP   = 0.014, -- proba micro-overshoot / frame
+    -- SAFE humanize DISPLAY only (camera path). Fire ray = aimFirePos exact.
+    safeGaussStuds   = 0.045, -- bruit monde entre les tirs (pas sur le ray)
+    safePxMin        = 2,     -- drift pixels L/R (et leger U/D) — look only
+    safePxMax        = 7,
+    safeSmoothTime   = 0.16,  -- expo / cinematographique (secondes)
+    safeBezierSec    = 0.22,  -- duree interpolation Bezier vers cible
+    safeOvershootP   = 0.010, -- proba micro-overshoot / frame (look only)
 }
 
 -- La portee cible/aim suit la meme limite que l'ESP (proches uniquement)
@@ -250,7 +257,7 @@ local State = {
     -- boot Safe/Rage
     scriptMode    = nil,   -- "safe"|"rage"
     bootReady     = false,
-    -- humanize SAFE (jamais lock centre exact hitbox)
+    -- humanize SAFE (look only — fire window = exact head/predict)
     humPxOff      = Vector2.zero,
     humPxTarget   = Vector2.zero,
     humPxRetarget = 0,
@@ -710,9 +717,9 @@ local function stickyTarget()
 end
 
 ----------------------------------------------------------------------
--- CAMERA LOCK (lissage) + humanize SAFE
--- SAFE: gaussian + Bezier + drift px + smooth cinematographique
--- (humanized / harder to flag, not magic — PAS 100% undetect)
+-- CAMERA LOCK (lissage) + humanize SAFE (DISPLAY only)
+-- Safe: gauss / Bezier / drift / smooth pour le LOOK entre les tirs.
+-- Fire window: aimFirePos exact (tete+predict) — 0 miss, pas de offset.
 ----------------------------------------------------------------------
 local function myCharacterRoot()
     local c = LocalPlayer.Character
@@ -747,17 +754,23 @@ end
 
 local function retargetHumPixels()
     local lo = CFG.safePxMin or 2
-    local hi = CFG.safePxMax or 8
+    local hi = CFG.safePxMax or 7
     if hi < lo then hi = lo end
     local mag = lo + math.random() * (hi - lo)
     local ang = math.random() * math.pi * 2
-    -- L/R dominant, leger U/D (erreur humaine)
+    -- L/R dominant, leger U/D (erreur humaine) — DISPLAY only
     State.humPxTarget = Vector2.new(math.cos(ang) * mag, math.sin(ang) * mag * 0.45)
     State.humPxRetarget = tick() + (0.4 + math.random() * 1.1)
 end
 
-local function humanizedAimPos(t, part)
-    local base = aimWorldPos(t, part)
+-- Exact head + predict — trigger / fire / last-frame cam. NEVER humanized.
+local function aimFirePos(t, part)
+    return aimWorldPos(t, part)
+end
+
+-- Humanized look target (Safe only). Rage = exact.
+local function aimDisplayPos(t, part)
+    local base = aimFirePos(t, part)
     if not base then return nil end
     if State.scriptMode ~= "safe" then return base end
 
@@ -769,18 +782,17 @@ local function humanizedAimPos(t, part)
     State.humPxTarget = State.humPxTarget or Vector2.zero
     State.humPxOff = State.humPxOff:Lerp(State.humPxTarget, 0.07)
 
-    local std = CFG.safeGaussStuds or 0.055
+    local std = CFG.safeGaussStuds or 0.045
     local g = Vector3.new(gaussNoise(std), gaussNoise(std * 0.7), gaussNoise(std))
     local pxWorld = pixelOffsetToWorld(Camera, base, State.humPxOff)
     local noisy = base + pxWorld + g
 
-    -- micro-overshoot / correction subtile (passe LEGEREMENT la tete puis revient)
+    -- micro-overshoot / correction (look only — jamais sur le ray de tir)
     if now < (State.humOverUntil or 0) then
         local look = noisy - Camera.CFrame.Position
         if look.Magnitude > 0.05 then
             local side = Camera.CFrame.RightVector * ((State.humPxOff.X or 0) * 0.008)
             local amt = 0.05 + math.random() * 0.07
-            -- phase: 1ere moitie = overshoot, 2e = pull-back vers bruit
             local phase = (State.humOverUntil - now) / math.max((State.humOverDur or 0.08), 0.04)
             if phase > 0.45 then
                 noisy = noisy + look.Unit * amt + side
@@ -788,7 +800,7 @@ local function humanizedAimPos(t, part)
                 noisy = noisy - look.Unit * (amt * 0.35)
             end
         end
-    elseif math.random() < (CFG.safeOvershootP or 0.014) then
+    elseif math.random() < (CFG.safeOvershootP or 0.010) then
         State.humOverDur = 0.05 + math.random() * 0.07
         State.humOverUntil = now + State.humOverDur
     end
@@ -798,12 +810,12 @@ end
 local function snapCamera(t, part, smoothing)
     if not part then return end
     smoothing = smoothing == nil and CFG.aimSmoothing or smoothing
-    local pos = humanizedAimPos(t, part)
+    local pos = aimDisplayPos(t, part)
     if not pos then return end
 
     pcall(function()
         if State.scriptMode == "safe" then
-            -- Jamais hard-lock centre: Bezier + expo smooth dt-stable
+            -- Look humanise: Bezier + expo smooth (entre les tirs)
             local now = tick()
             local dt = now - (State.humLastT or now)
             if dt <= 0 or dt > 0.08 then dt = 1 / 60 end
@@ -816,7 +828,6 @@ local function snapCamera(t, part, smoothing)
                 State.humLastLook = Camera.CFrame.LookVector
                 State.humBezierRefresh = now + (0.55 + math.random() * 0.45)
             elseif now >= (State.humBezierRefresh or 0) and (State.humBezierT or 0) >= 0.92 then
-                -- micro-recurve periodique (evite trajectoire "figee" trop longue)
                 State.humBezierT = 0.35 + math.random() * 0.25
                 State.humLastLook = Camera.CFrame.LookVector
                 State.humBezierRefresh = now + (0.5 + math.random() * 0.55)
@@ -828,11 +839,10 @@ local function snapCamera(t, part, smoothing)
             goalDir = goalDir.Unit
 
             local startDir = State.humLastLook or Camera.CFrame.LookVector
-            local bezSec = math.max(CFG.safeBezierSec or 0.28, 0.05)
+            local bezSec = math.max(CFG.safeBezierSec or 0.22, 0.05)
             State.humBezierT = math.clamp((State.humBezierT or 0) + dt / bezSec, 0, 1)
             local tBez = State.humBezierT
 
-            -- points de controle: courbe douce (pas lineaire) vers la cible offset
             local p0 = camPos + startDir
             local p3 = pos
             local side = Camera.CFrame.RightVector * ((State.humPxOff.X or 0) * 0.015)
@@ -843,7 +853,7 @@ local function snapCamera(t, part, smoothing)
             if bentDir.Magnitude < 1e-4 then bentDir = goalDir else bentDir = bentDir.Unit end
 
             local goal = CFrame.lookAt(camPos, camPos + bentDir)
-            local smoothTime = math.max(CFG.safeSmoothTime or 0.20, 0.04)
+            local smoothTime = math.max(CFG.safeSmoothTime or 0.16, 0.04)
             local alpha = 1 - math.exp(-dt / smoothTime)
             alpha = math.clamp(alpha, 0.02, 0.55)
             Camera.CFrame = Camera.CFrame:Lerp(goal, alpha)
@@ -851,7 +861,7 @@ local function snapCamera(t, part, smoothing)
             return
         end
 
-        -- RAGE: comportement agressif (snap / lerp rapide)
+        -- RAGE: snap / lerp rapide sur aim exact
         local goal = CFrame.lookAt(Camera.CFrame.Position, pos)
         if smoothing <= 0.001 then
             Camera.CFrame = goal
@@ -874,18 +884,15 @@ local function snapCamera(t, part, smoothing)
     end
 end
 
--- Force look EXACT (avant tir) — RAGE only; SAFE refuse hard-lock centre
+-- Force look EXACT sur aimFirePos (fenetre de tir Safe + Rage hard-snap)
 local function hardLockCamera(t, part)
-    if State.scriptMode == "safe" then
-        snapCamera(t, part, nil)
-        return
-    end
     if not part then return end
-    local pos = humanizedAimPos(t, part)
+    local pos = aimFirePos(t, part)
     if not pos then return end
     pcall(function()
         Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, pos)
     end)
+    State.humLastLook = Camera.CFrame.LookVector
     if CFG.aimMouseNudge and typeof(mousemoverel) == "function" then
         local sp, on = Camera:WorldToViewportPoint(pos)
         if on and sp.Z > 0 then
@@ -895,10 +902,10 @@ local function hardLockCamera(t, part)
     end
 end
 
--- Angle (deg) entre le regard camera et la direction vers la part.
+-- Angle (deg) vers le point de TIR exact (pas le display humanise)
 local function aimAngleTo(t, part)
     if not part then return 999 end
-    local pos = humanizedAimPos(t, part)
+    local pos = aimFirePos(t, part)
     if not pos then return 999 end
     local dir = pos - Camera.CFrame.Position
     if dir.Magnitude < 0.01 then return 0 end
@@ -907,10 +914,10 @@ local function aimAngleTo(t, part)
 end
 
 -- La tete est-elle DANS le rayon trigFov a l'ecran ?
--- Gate sur position STABLE (pas humanize) — sinon bruit Safe = flicker in/out FOV.
+-- Gate sur aimFirePos (stable) — humanize ne doit jamais faire rater le gate.
 local function withinTrigFov(t, part)
     if not part then return false end
-    local pos = aimWorldPos(t, part)
+    local pos = aimFirePos(t, part)
     if not pos then return false end
     local sp, on = Camera:WorldToViewportPoint(pos)
     if not (on and sp.Z > 0) then return false end
@@ -918,12 +925,11 @@ local function withinTrigFov(t, part)
     return (Vector2.new(sp.X, sp.Y) - center).Magnitude <= CFG.trigFov
 end
 
--- Pret a tirer (instant — pas de delay ADS)
--- Angle / visibilite: base stable; camera reste humanisee via snapCamera.
+-- Pret a tirer — gates sur aimFirePos exact (0 miss)
 local function triggerCanFire(t, part)
     if not isTargetValid(t, part) then return false end
     if not withinTrigFov(t, part) then return false end
-    local ap = aimWorldPos(t, part)
+    local ap = aimFirePos(t, part)
     if not isVisible(part, ap, t) then return false end
     if CFG.trigHardSnap then
         return aimAngleTo(t, part) <= CFG.alignThreshold
@@ -1005,9 +1011,6 @@ local function doFire()
     pulseCrouchOnFire()
     task.spawn(function()
         local d = math.clamp(CFG.fireDelay, 0.02, 0.25)
-        if State.scriptMode == "safe" then
-            d = math.clamp(d + 0.01 + math.random() * 0.025, 0.03, 0.28)
-        end
         local ok = false
         -- Mode naturel : clic instantane en priorite (pas de fireDelay)
         if not CFG.trigHardSnap and typeof(mouse1click) == "function" then
@@ -1030,11 +1033,7 @@ local function doFire()
                     local mp = UserInputService:GetMouseLocation()
                     if mp then mx, my = mp.X, mp.Y end
                 end)
-                -- SAFE: leger jitter souris avant clic (pas pile centre ecran)
-                if State.scriptMode == "safe" then
-                    mx = mx + (math.random() - 0.5) * 3
-                    my = my + (math.random() - 0.5) * 2
-                end
+                -- Pas de jitter: le ray suit la camera deja hard-lockee sur aimFirePos
                 ok = pcall(function()
                     vim:SendMouseButtonEvent(mx, my, 0, true, game, 1)
                     task.wait(d)
@@ -1258,12 +1257,21 @@ local function stepEngage()
     State.locked = true
     prunePredTrack()
 
-    if armed then
+    local wantFire = CFG.trigEnabled
+        and State.trigReady
+        and (not CFG.trigOnlyWhenLocked or armed)
+        and triggerCanFire(tgt, part)
+
+    if wantFire then
+        -- Fire window: camera + ray = aimFirePos exact (0 miss, Safe comme Rage)
+        hardLockCamera(tgt, part)
+    elseif armed then
+        -- Entre les tirs: Safe humanise le look, Rage snap agressif
         snapCamera(tgt, part, CFG.aimSmoothing)
     end
 
     State.aligned = withinTrigFov(tgt, part)
-    if CFG.trigHardSnap and State.scriptMode ~= "safe" then
+    if CFG.trigHardSnap then
         State.aligned = aimAngleTo(tgt, part) <= CFG.alignThreshold
     end
 
@@ -1274,13 +1282,12 @@ local function stepEngage()
     if not State.trigReady then return end
     if CFG.trigOnlyWhenLocked and not armed then return end
 
-    if not triggerCanFire(tgt, part) then
+    if not wantFire then
         State.settleLeft = 0
         return
     end
 
-    if CFG.trigHardSnap and State.scriptMode ~= "safe" then
-        hardLockCamera(tgt, part)
+    if CFG.trigHardSnap then
         if aimAngleTo(tgt, part) > CFG.alignThreshold then return end
     end
 
@@ -1509,7 +1516,7 @@ bootSub.Font = Enum.Font.Gotham
 bootSub.TextSize = 9
 bootSub.TextColor3 = UI_TXT_DIM
 bootSub.TextWrapped = true
-bootSub.Text = "SAFE = humanize (gauss/Bezier/drift) · RAGE = snap. Pas 100% undetect."
+bootSub.Text = "SAFE = humanisé · 0 miss · aussi fort  ·  RAGE = snap brut"
 bootSub.Parent = bootGui
 
 local function makeBootBtn(text, bg, order)
@@ -1559,28 +1566,30 @@ local function applyRagePreset()
 end
 
 local function applySafePreset()
-    -- Soft FOV / reaction plus lente que Rage — jamais hard-lock centre
+    -- Aussi fort (ou +) que Rage: FOV / trigger / predict max.
+    -- Seul le LOOK camera est humanise; le tir = aimFirePos exact.
     CFG.aimEnabled = true
     CFG.trigEnabled = true
     CFG.espEnabled = true
-    CFG.aimSmoothing = 0.72
-    CFG.aimFov = 260
-    CFG.aimReleaseFov = 310
-    CFG.trigFov = 48
-    CFG.trigCooldown = 0.09
-    CFG.fireDelay = 0.045
-    CFG.alignThreshold = 3.5
+    CFG.aimSmoothing = 0
+    CFG.aimFov = 520
+    CFG.aimReleaseFov = 570
+    CFG.trigFov = 130
+    CFG.trigCooldown = 0
+    CFG.fireDelay = 0.02
+    CFG.alignThreshold = 8.0
     CFG.trigHardSnap = false
     CFG.predEnabled = true
-    CFG.predScale = 0.85
-    CFG.predMaxStuds = 4.2
+    CFG.predScale = 1.0
+    CFG.predMaxStuds = 5.5
     CFG.visibleOnly = true
     CFG.teamCheck = true
-    CFG.safeGaussStuds = 0.055 + math.random() * 0.025
+    CFG.safeGaussStuds = 0.035 + math.random() * 0.02
     CFG.safePxMin = 2
-    CFG.safePxMax = 8
-    CFG.safeSmoothTime = 0.18 + math.random() * 0.08
-    CFG.safeBezierSec = 0.24 + math.random() * 0.12
+    CFG.safePxMax = 7
+    CFG.safeSmoothTime = 0.12 + math.random() * 0.06
+    CFG.safeBezierSec = 0.16 + math.random() * 0.08
+    CFG.safeOvershootP = 0.008 + math.random() * 0.006
     retargetHumPixels()
 end
 
@@ -1594,9 +1603,9 @@ local function startScriptMode(mode)
     end
     if mode == "safe" then
         applySafePreset()
-        modeBadge.Text = "MODE: SAFE (humanize)"
+        modeBadge.Text = "MODE: SAFE (humanisé · 0 miss)"
         modeBadge.TextColor3 = Color3.fromRGB(40, 120, 70)
-        sub.Text = "v" .. VERSION .. " SAFE - humanize"
+        sub.Text = "v" .. VERSION .. " SAFE - humanisé · 0 miss"
     else
         applyRagePreset()
         modeBadge.Text = "MODE: RAGE"
@@ -1614,7 +1623,7 @@ local function startScriptMode(mode)
         StarterGui:SetCore("SendNotification", {
             Title = "UNDETEK Sniper v" .. VERSION,
             Text = (mode == "safe")
-                and "SAFE: visee humanisee (pas 100% undetect)."
+                and "SAFE: visee humanisee, toujours precise."
                 or "RAGE: visee agressive. RightShift = menu.",
             Duration = 6,
         })
