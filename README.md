@@ -1,18 +1,25 @@
-# UNDETEK xhub - Sniper Duels
+# UNDETEK xhub — Sniper Duels
 
-Free standalone script. No hub. No key.
+Free standalone script · open source · non-obfusqué. No hub. No key.
+PlaceId `109397169461300` · **v3.2**
 
 [-- UNDETEK xhub Supported Games --]
 [+] Sniper Duels
 
 [-- Features --]
-[+] Aimbot silent (no-hook)
-[+] Triggerbot
-[+] Prediction
-[+] ESP
-[+] FOV lock
-[+] Rayfield UI
-[+] 100% standalone (no hub)
+[+] Boot : Start Safe Script | Start Rage Script
+[+] Mode Safe — visée plus naturelle
+[+] Mode Rage — agressif
+[+] Aimbot caméra + Triggerbot
+[+] Predict + range track
+[+] ESP (box / nom / vie · 250 studs)
+[+] Cercle FOV (toggle) · FOV caméra 120
+[+] UI blanche compacte · RightShift · UNLOAD
+
+[-- Honest limits --]
+[-] Safe ≠ magique — juste une visée plus douce
+[-] Pas de Silent Aim / Kill Aura (chemins instables retirés)
+[-] Optimisé pour Xeno (standalone)
 
 [-- Suggested Executors --]
 PC: Xeno, Volt, Solara
@@ -30,6 +37,6 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/jvd11665-dot/UNDETEK-
 ```
 
 [-- Tags --]
-sniper duels, aimbot, triggerbot, predict, esp, undetek, xhub, roblox script, free script
+sniper duels, aimbot, triggerbot, predict, esp, safe mode, rage mode, undetek, xhub, roblox script, free script
 
-*UNDETEK xhub - free scripts.*
+*UNDETEK xhub — free scripts.*
