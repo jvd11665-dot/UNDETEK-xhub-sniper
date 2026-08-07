@@ -1,4 +1,4 @@
-﻿# UNDETEK xhub — Sniper Duels
+# UNDETEK xhub - Sniper Duels
 
 Free standalone script. No hub. No key.
 
@@ -32,4 +32,4 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/jvd11665-dot/UNDETEK-
 [-- Tags --]
 sniper duels, aimbot, triggerbot, predict, esp, undetek, xhub, roblox script, free script
 
-*UNDETEK xhub — free scripts.*
+*UNDETEK xhub - free scripts.*
