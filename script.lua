@@ -3,11 +3,19 @@
     DESCRIPTION: Aimbot camera (no-hook, anti-crash), triggerbot, prediction +
     range track, ESP. Au boot: Start Safe Script | Start Rage Script.
     Safe = visee humanisee, toujours precise (0 miss). Rage = snap brut.
+    360 Auto: capture sphere + cam libre + tir auto (micro-flick).
     UI blanche compacte, RightShift.
     100% standalone (no hub / no HttpGet), executor Xeno.
 
-    VERSION: 3.4 (2026-08-07)
+    VERSION: 3.5 (2026-08-07)
     CIBLE: Roblox "Sniper Duels" (place 109397169461300) • Executor: Xeno
+
+    v3.5 — 360 Auto · cam libre · tir auto (Safe + Rage):
+      * CFG.full360 ON: acquisition sphere 360 (ignore aimFov/trigFov)
+      * Cam libre (freeCam): pas de lock continu — look normal joueur
+      * Micro-flick no-hook: save CFrame -> snap aimFirePos 1 frame -> fire -> restore
+      * Auto-fire des qu'une cible valide (range + mur + equipe)
+      * Toggle UI "360 Auto" · default ON Safe et Rage
 
     v3.4 — Rage FOV / aggro a fond:
       * aimFov / trigFov / aimReleaseFov = 999 (ecran entier, px)
@@ -23,48 +31,9 @@
       * Retire jitter VIM / delay Safe qui faisaient rater
       * Labels: Safe = humanise · 0 miss · aussi fort | Rage = snap brut
 
-    v3.2 — Improve-loop:
-      * FOV circle sync mode (Safe/Rage) + rayon aim vs trig reel
-      * Trigger FOV gate sur pos stable (plus de flicker Safe)
-      * Sticky anti-ally · overshoot pull-back · aim micro-refresh
-      * Boot: FOV 120 apres choix mode · anti double-GUI · unload boot modal
-      * labels FR · Cercle FOV toggle · Annuler/UNLOAD boot
-
-    v3.1 — Boot Safe vs Rage:
-      * Modal 2 boutons avant features combat.
-      * getgenv().UNDETEK_SNIPER_MODE = "safe"|"rage"
-      * Safe = visee humanisee · Rage = agressif (comportement v3.0).
-
-    v3.0 — 3eme personne SUPPRIMEE. UI BLANCHE compacte "UNDETEK xhub" (boutons
-      only, sans slider/emoji). Tout ON a fond par defaut (Aim/Trigger/Predict/
-      WallCheck/Team/ESP). FOV camera forcee 120 deg. ESP portee 250 studs.
-
     BUILD 100% NO-HOOK (aucun hook executor -> aucun crash sur ce Xeno):
-      * Le tir est un RAYCAST depuis la CAMERA. On verrouille la camera sur la
-        TETE de l'ennemi -> la balle part en HEADSHOT ("gg"). C'est la voie FIABLE.
-      * Retire en v2.1: Silent Aim ET Kill Aura (chemins a hook -> instables/crash).
-        -> Il reste: AIMBOT (no-hook) + TRIGGERBOT (no-hook) + ESP.
-
-    v2.6 — PREDICT + RANGE TRACK:
-      * Lead mouvement (vitesse/accel) + portee (temps vol, drop, boost longue dist).
-
-    v2.5 — TRIGGER NATUREL (compatible animation visée / ADS):
-      * Plus de snap brutal avant tir (Hard Snap OFF par defaut).
-      * Attente courte apres clic droit (animation scope) puis tir sur crosshair.
-      * Tir quand la tete est DEJA sur le viseur ecran — pas de secousse cam.
-
-    v2.4 — PERF (clic droit fluide, moins de lag):
-      * 1 seule boucle aim (plus de double Heartbeat sur stepEngage).
-      * Cache cibles / equipe / raycast mur / filtre raycast.
-      * ESP leger (Head+HRP, throttle quand aim actif).
-      * aimMouseNudge OFF par defaut.
-
-    v2.3 — AIM + TRIGGER PLUS FIABLES (shots qui "passent pas"):
-      * Avant chaque tir: SNAP DUR (lerp=1) sur la tete FRAICHE, puis fire
-        seulement si angle < seuil (plus de tir pendant le lerp).
-      * Camera BindToRenderStep @ Last (combat la cam custom du jeu).
-      * Clic: press+release en priorite (VIM avec coords ecran reelles).
-      * Settle 1 frame apres hard-snap si pas encore aligne.
+      * Tir = RAYCAST camera. Micro-flick CFrame (pas de Silent Aim hook).
+      * Retire: Silent Aim / Kill Aura (hooks -> crash Xeno).
 
     Ennemis: Workspace.Characters
       * plat:  Workspace.Characters.<username>
@@ -92,7 +61,7 @@ local Camera = Workspace.CurrentCamera
 -- FOV camera forcee a 120 deg (max Roblox) au lancement — non reglable menu
 local FIXED_FOV = 120
 
-local VERSION = "3.4"
+local VERSION = "3.5"
 
 ----------------------------------------------------------------------
 -- CONFIG (RAGE defaults — appliques apres choix boot; combat OFF tant que pas choisi)
@@ -162,6 +131,9 @@ local CFG = {
     safeSmoothTime   = 0.16,  -- expo / cinematographique (secondes)
     safeBezierSec    = 0.22,  -- duree interpolation Bezier vers cible
     safeOvershootP   = 0.010, -- proba micro-overshoot / frame (look only)
+
+    -- 360 Auto: capture sphere + cam libre + tir auto (micro-flick)
+    full360          = true,  -- ignore FOV cone; range + wall + team
 }
 
 -- La portee cible/aim suit la meme limite que l'ESP (proches uniquement)
@@ -264,6 +236,8 @@ local State = {
     -- boot Safe/Rage
     scriptMode    = nil,   -- "safe"|"rage"
     bootReady     = false,
+    -- 360 Auto: cam libre (pas de lock continu) — flick uniquement au tir
+    freeCam       = true,
     -- humanize SAFE (look only — fire window = exact head/predict)
     humPxOff      = Vector2.zero,
     humPxTarget   = Vector2.zero,
@@ -681,7 +655,51 @@ local function acquireTarget(fov, needVisible)
     return best, bestPart
 end
 
+-- 360: meilleure menace dans la sphere (ignore FOV ecran / yaw).
+-- Score = distance 3D (plus proche) + leger bonus face-cam (threat).
+local function getBestTarget360(needVisible)
+    if needVisible == nil then needVisible = true end
+    local best, bestPart, bestScore = nil, nil, math.huge
+    local mr = myRootPart()
+    local camPos = Camera and Camera.CFrame.Position
+    local look = Camera and Camera.CFrame.LookVector
+    for _, t in ipairs(collectTargets(false)) do
+        if not (CFG.teamCheck and t.sameTeam) then
+            local part = aimPartOf(t)
+            if part then
+                local ap = aimWorldPos(t, part)
+                if ap then
+                    local d3 = mr and (ap - mr.Position).Magnitude or math.huge
+                    if d3 <= maxDist() then
+                        local vis = (not needVisible) or isVisible(part, ap, t)
+                        if vis then
+                            local score = d3
+                            if camPos and look then
+                                local dir = ap - camPos
+                                if dir.Magnitude > 0.05 then
+                                    local facing = look:Dot(dir.Unit)
+                                    -- leger preferentiel devant, mais derriere reste eligible
+                                    if facing > 0 then
+                                        score = score - facing * 4
+                                    end
+                                end
+                            end
+                            if score < bestScore then
+                                bestScore = score
+                                best = t
+                                bestPart = part
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return best, bestPart
+end
+
 -- Cible sticky : garde la meme tant que vivante / dans releaseFov / a portee / visible / pas ally.
+-- full360: ignore releaseFov ecran — garde tant que range + mur + equipe OK.
 local function stickyTarget()
     if CFG.aimSticky and State.currentTarget then
         local m = State.currentTarget
@@ -702,12 +720,18 @@ local function stickyTarget()
                     if part and mr then
                         local ap = aimWorldPos(t, part)
                         if ap and (ap - mr.Position).Magnitude <= maxDist() then
-                            local sp, on = Camera:WorldToViewportPoint(ap)
-                            local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-                            if on and sp.Z > 0
-                               and (Vector2.new(sp.X, sp.Y) - center).Magnitude <= CFG.aimReleaseFov
-                               and isVisible(part, ap, t) then
-                                return t, part
+                            if CFG.full360 then
+                                if isVisible(part, ap, t) then
+                                    return t, part
+                                end
+                            else
+                                local sp, on = Camera:WorldToViewportPoint(ap)
+                                local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+                                if on and sp.Z > 0
+                                   and (Vector2.new(sp.X, sp.Y) - center).Magnitude <= CFG.aimReleaseFov
+                                   and isVisible(part, ap, t) then
+                                    return t, part
+                                end
                             end
                         end
                     end
@@ -718,7 +742,12 @@ local function stickyTarget()
         end
         State.currentTarget = nil
     end
-    local t, part = acquireTarget(CFG.aimFov, true)
+    local t, part
+    if CFG.full360 then
+        t, part = getBestTarget360(true)
+    else
+        t, part = acquireTarget(CFG.aimFov, true)
+    end
     if t then State.currentTarget = t.model end
     return t, part
 end
@@ -922,7 +951,9 @@ end
 
 -- La tete est-elle DANS le rayon trigFov a l'ecran ?
 -- Gate sur aimFirePos (stable) — humanize ne doit jamais faire rater le gate.
+-- full360: gate ignoree (acquisition sphere).
 local function withinTrigFov(t, part)
+    if CFG.full360 then return true end
     if not part then return false end
     local pos = aimFirePos(t, part)
     if not pos then return false end
@@ -933,12 +964,14 @@ local function withinTrigFov(t, part)
 end
 
 -- Pret a tirer — gates sur aimFirePos exact (0 miss)
+-- full360: pas de FOV / angle gate — le micro-flick aligne au moment du tir
 local function triggerCanFire(t, part)
     if not isTargetValid(t, part) then return false end
-    if not withinTrigFov(t, part) then return false end
+    if not CFG.full360 and not withinTrigFov(t, part) then return false end
     local ap = aimFirePos(t, part)
+    if not ap then return false end
     if not isVisible(part, ap, t) then return false end
-    if CFG.trigHardSnap then
+    if CFG.trigHardSnap and not CFG.full360 then
         return aimAngleTo(t, part) <= CFG.alignThreshold
     end
     return true
@@ -1053,6 +1086,89 @@ local function doFire()
         end
         task.wait(0.01)
         State.firing = false
+    end)
+    return true
+end
+
+-- Micro-flick no-hook (360 / freeCam):
+-- save cam -> snap aimFirePos -> fire sync -> restore immediat (pcall).
+-- Joueur voit cam normale; balle part pendant le flick 1 frame.
+local function flickFire(t, part)
+    if State.firing then return false end
+    if (tick() - State.lastFire) < CFG.trigCooldown then return false end
+    if not isTargetValid(t, part) then return false end
+
+    Camera = Workspace.CurrentCamera
+    if not Camera then return false end
+
+    local pos = aimFirePos(t, part)
+    if not pos then return false end
+    if CFG.visibleOnly and not isVisible(part, pos, t) then return false end
+
+    State.firing = true
+    State.lastFire = tick()
+    pulseCrouchOnFire()
+
+    local savedCF = Camera.CFrame
+    local restored = false
+    local function restoreCam()
+        if restored then return end
+        restored = true
+        pcall(function()
+            local cam = Workspace.CurrentCamera
+            if cam then cam.CFrame = savedCF end
+        end)
+    end
+
+    -- Snap exact (0 miss) — pas d'humanize sur le ray
+    pcall(function()
+        Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, pos)
+    end)
+
+    local ok = false
+    local d = math.clamp(CFG.fireDelay, 0.02, 0.12)
+
+    -- Clic sync pendant le snap (avant restore)
+    if typeof(mouse1click) == "function" then
+        ok = pcall(mouse1click)
+    end
+    if not ok and typeof(mouse1press) == "function" and typeof(mouse1release) == "function" then
+        ok = pcall(mouse1press)
+        task.spawn(function()
+            task.wait(d)
+            pcall(mouse1release)
+        end)
+    end
+    if not ok then
+        local vim
+        pcall(function() vim = game:GetService("VirtualInputManager") end)
+        if vim then
+            local vs = Camera.ViewportSize
+            local mx, my = vs.X / 2, vs.Y / 2
+            pcall(function()
+                local mp = UserInputService:GetMouseLocation()
+                if mp then mx, my = mp.X, mp.Y end
+            end)
+            ok = pcall(function()
+                vim:SendMouseButtonEvent(mx, my, 0, true, game, 1)
+            end)
+            task.spawn(function()
+                task.wait(d)
+                pcall(function()
+                    vim:SendMouseButtonEvent(mx, my, 0, false, game, 1)
+                end)
+            end)
+        end
+    end
+
+    -- Restore immediat — cam libre pour le joueur
+    restoreCam()
+
+    task.spawn(function()
+        task.wait(0.02)
+        State.firing = false
+        -- filet de secu si un autre thread a touche la cam
+        restoreCam()
     end)
     return true
 end
@@ -1198,6 +1314,11 @@ local function stepFovCircle()
     end
     local c = State.fovCircle
     if not c then return end
+    -- 360 Auto: pas de cone FOV utile — cercle masque
+    if CFG.full360 then
+        c.Visible = false
+        return
+    end
     local armed = CFG.aimEnabled and (CFG.aimAlways or (CFG.aimHoldMouse2 and State.holdingM2))
     if CFG.showFovCircle and (armed or CFG.trigEnabled) then
         c.Visible = true
@@ -1225,13 +1346,19 @@ end
 ----------------------------------------------------------------------
 local function aimActive()
     if not CFG.aimEnabled then return false end
+    -- 360 Auto: toujours "arme" (comme RMB maintenu) sans lock cam
+    if CFG.full360 then return true end
     if CFG.aimAlways then return true end
     if CFG.aimHoldMouse2 and State.holdingM2 then return true end
     return false
 end
 
+local function freeCamActive()
+    return CFG.full360 and State.freeCam
+end
+
 ----------------------------------------------------------------------
--- ENGAGE : clic droit = aim+predict+trigger | trigger seul OK aussi
+-- ENGAGE : 360 = capture + flick auto | sinon clic droit aim+trigger
 ----------------------------------------------------------------------
 local function stepEngage()
     if not State.bootReady then return end
@@ -1246,7 +1373,27 @@ local function stepEngage()
 
     local armed = aimActive()
     local tgt, part
+    local free = freeCamActive()
 
+    -- ─── 360 Auto + cam libre: acquire sphere, pas de lock continu ───
+    if CFG.full360 then
+        if not (CFG.aimEnabled or CFG.trigEnabled) then return end
+        tgt, part = stickyTarget()
+        if not part or not part.Parent or not isTargetValid(tgt, part) then
+            State.settleLeft = 0
+            return
+        end
+        State.locked = true
+        prunePredTrack()
+        -- Cam libre: jamais snapCamera / hardLock entre les tirs
+        State.aligned = true
+        if CFG.trigEnabled and State.trigReady and triggerCanFire(tgt, part) then
+            flickFire(tgt, part)
+        end
+        return
+    end
+
+    -- ─── Mode classique (FOV cone + lock cam) ───
     if armed then
         tgt, part = stickyTarget()
     elseif CFG.trigEnabled then
@@ -1272,7 +1419,7 @@ local function stepEngage()
     if wantFire then
         -- Fire window: camera + ray = aimFirePos exact (0 miss, Safe comme Rage)
         hardLockCamera(tgt, part)
-    elseif armed then
+    elseif armed and not free then
         -- Entre les tirs: Safe humanise le look, Rage snap agressif
         snapCamera(tgt, part, CFG.aimSmoothing)
     end
@@ -1454,6 +1601,9 @@ local function addToggle(label, key)
     end
     btn.MouseButton1Click:Connect(function()
         CFG[key] = not CFG[key]
+        if key == "full360" then
+            State.freeCam = CFG.full360
+        end
         if not CFG.espEnabled then for _, d in pairs(State.drawings) do hideEsp(d) end end
         render()
     end)
@@ -1464,6 +1614,7 @@ local function addToggle(label, key)
 end
 
 -- Boutons principaux (actives apres choix Safe/Rage)
+addToggle("360 Auto", "full360")
 addToggle("Aimbot", "aimEnabled")
 addToggle("Trigger", "trigEnabled")
 addToggle("Predict", "predEnabled")
@@ -1523,7 +1674,7 @@ bootSub.Font = Enum.Font.Gotham
 bootSub.TextSize = 9
 bootSub.TextColor3 = UI_TXT_DIM
 bootSub.TextWrapped = true
-bootSub.Text = "SAFE = humanisé · 0 miss · aussi fort  ·  RAGE = snap brut"
+bootSub.Text = "SAFE / RAGE · 360° auto · cam libre · tir auto"
 bootSub.Parent = bootGui
 
 local function makeBootBtn(text, bg, order)
@@ -1547,10 +1698,12 @@ local rageBtn = makeBootBtn("Start Rage Script", Color3.fromRGB(230, 190, 175), 
 local bootUnloadBtn = makeBootBtn("Annuler / UNLOAD", Color3.fromRGB(220, 220, 225), 3)
 
 local function applyRagePreset()
-    -- Absolute max aggression — FOV ecran entier, snap instant, predict/range max
+    -- Absolute max aggression — 360 + flick + auto
     CFG.aimEnabled = true
     CFG.trigEnabled = true
     CFG.espEnabled = true
+    CFG.full360 = true
+    State.freeCam = true
     CFG.aimSmoothing = 0
     CFG.aimFov = 999
     CFG.aimReleaseFov = 999
@@ -1575,7 +1728,7 @@ local function applyRagePreset()
     CFG.rangeLeadBoost = 0.14
     CFG.visibleOnly = true
     CFG.teamCheck = true
-    CFG.showFovCircle = true
+    CFG.showFovCircle = false
     -- reset humanize state (evite residu Safe si re-exec apres unload partiel)
     State.humBezierT = 0
     State.humBezierModel = nil
@@ -1586,11 +1739,12 @@ local function applyRagePreset()
 end
 
 local function applySafePreset()
-    -- Humanise + 0 miss: LOOK camera humanise; tir = aimFirePos exact.
-    -- FOV large (meme plafond) pour rester aussi fort; pas de snap brut.
+    -- 360 + cam libre + tir auto · 0 miss sur flick (pas de humanize display)
     CFG.aimEnabled = true
     CFG.trigEnabled = true
     CFG.espEnabled = true
+    CFG.full360 = true
+    State.freeCam = true
     CFG.aimSmoothing = 0
     CFG.aimFov = 999
     CFG.aimReleaseFov = 999
@@ -1615,7 +1769,7 @@ local function applySafePreset()
     CFG.rangeLeadBoost = 0.10
     CFG.visibleOnly = true
     CFG.teamCheck = true
-    CFG.showFovCircle = true
+    CFG.showFovCircle = false
     CFG.safeGaussStuds = 0.035 + math.random() * 0.02
     CFG.safePxMin = 2
     CFG.safePxMax = 7
@@ -1635,14 +1789,14 @@ local function startScriptMode(mode)
     end
     if mode == "safe" then
         applySafePreset()
-        modeBadge.Text = "MODE: SAFE (humanisé · 0 miss)"
+        modeBadge.Text = "MODE: SAFE · 360° auto · cam libre"
         modeBadge.TextColor3 = Color3.fromRGB(40, 120, 70)
-        sub.Text = "v" .. VERSION .. " SAFE - humanisé · 0 miss"
+        sub.Text = "v" .. VERSION .. " SAFE - 360° auto · cam libre · tir auto"
     else
         applyRagePreset()
-        modeBadge.Text = "MODE: RAGE"
+        modeBadge.Text = "MODE: RAGE · 360° auto · cam libre"
         modeBadge.TextColor3 = Color3.fromRGB(160, 70, 50)
-        sub.Text = "v" .. VERSION .. " RAGE - FOV 999 - snap"
+        sub.Text = "v" .. VERSION .. " RAGE - 360° auto · cam libre · tir auto"
     end
     bootGui.Visible = false
     pcall(function() bootGui:Destroy() end)
@@ -1654,9 +1808,7 @@ local function startScriptMode(mode)
     pcall(function()
         StarterGui:SetCore("SendNotification", {
             Title = "UNDETEK Sniper v" .. VERSION,
-            Text = (mode == "safe")
-                and "SAFE: visee humanisee, toujours precise."
-                or "RAGE: FOV 999 a fond. RightShift = menu.",
+            Text = "360° auto · cam libre · tir auto. RightShift = menu.",
             Duration = 6,
         })
     end)
@@ -1694,9 +1846,10 @@ State.conns[#State.conns + 1] = RunService.Heartbeat:Connect(function()
         elseif State.trigReady then trigTxt = "ready"
         else trigTxt = "cooldown" end
         local modeTxt = State.scriptMode == "safe" and "SAFE" or (State.scriptMode == "rage" and "RAGE" or "?")
+        local camTxt = CFG.full360 and "360" or "FOV"
         status.Text = string.format(
-            "%s E:%d %s\nR:%dm Aim:%s Trig:%s",
-            modeTxt, n, tgtName, math.floor(State.lastRange + 0.5),
+            "%s %s E:%d %s\nR:%dm Aim:%s Trig:%s",
+            modeTxt, camTxt, n, tgtName, math.floor(State.lastRange + 0.5),
             aimActive() and "ON" or "off",
             trigTxt)
     end)
@@ -1758,7 +1911,7 @@ pcall(function()
     -- FOV 120 applique apres Start Safe/Rage (pas avant le modal)
     StarterGui:SetCore("SendNotification", {
         Title = "UNDETEK Sniper v" .. VERSION,
-        Text = "Choisis Start Safe ou Start Rage.",
+        Text = "Choisis Start Safe ou Start Rage · 360° auto.",
         Duration = 5,
     })
 end)
