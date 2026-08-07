@@ -2,9 +2,8 @@
     TITRE: UNDETEK xhub — Sniper Duels
     DESCRIPTION: Aimbot camera (no-hook, anti-crash), triggerbot, prediction +
     range track, ESP. Au boot: Start Safe Script | Start Rage Script.
-    Safe = visee humanisee (bruit gaussien, Bezier, offset px, lissage
-    cinematographique) — plus dur a flag, PAS magique / pas 100% undetect.
-    Rage = visee agressive actuelle. UI blanche compacte, RightShift.
+    Safe = visée plus naturelle. Rage = agressif.
+    UI blanche compacte, RightShift.
     100% standalone (no hub / no HttpGet), executor Xeno.
 
     VERSION: 3.2 (2026-08-07)
@@ -13,17 +12,14 @@
     v3.2 — Improve-loop:
       * FOV circle sync mode (Safe/Rage) + rayon aim vs trig reel
       * Trigger FOV gate sur pos stable (plus de flicker Safe)
-      * Sticky anti-ally · overshoot pull-back · bezier micro-refresh
+      * Sticky anti-ally · overshoot pull-back · aim micro-refresh
       * Boot: FOV 120 apres choix mode · anti double-GUI · unload boot modal
       * SAFE fire jitter VIM · labels FR · Cercle FOV toggle · Annuler/UNLOAD boot
 
-    v3.1 — Boot Safe vs Rage + aim humanise (SAFE):
+    v3.1 — Boot Safe vs Rage:
       * Modal 2 boutons avant features combat.
       * getgenv().UNDETEK_SNIPER_MODE = "safe"|"rage"
-      * SAFE: gaussian noise, courbe Bezier, drift 2–8 px L/R(+leger U/D),
-        smooth expo dt-stable, micro-overshoot — jamais lock centre exact.
-      * RAGE: snap / FOV large / defaults agressifs (comportement v3.0).
-      * Commentaire honnete: humanized / harder to flag, not magic.
+      * Safe = visée plus naturelle · Rage = agressif (comportement v3.0).
 
     v3.0 — 3eme personne SUPPRIMEE. UI BLANCHE compacte "UNDETEK xhub" (boutons
       only, sans slider/emoji). Tout ON a fond par defaut (Aim/Trigger/Predict/
