@@ -7,46 +7,34 @@
     UI blanche compacte, RightShift.
     100% standalone (no hub / no HttpGet), executor Xeno.
 
-    VERSION: 3.8 (2026-08-07)
+    VERSION: 4.1 (2026-08-07)
     CIBLE: Roblox "Sniper Duels" (place 109397169461300) • Executor: Xeno
 
+    v4.1 — TOUT AU MAX + GROSSE IA (cerveau cible):
+      * pickTargetAI(): scoring multi-critere au lieu du simple plus-proche
+        - part visible preferee (tete > torse > HRP)
+        - bonus HP bas (finit les kills), plus proche, ennemi qui nous vise
+        - lead prediction sur la part choisie (vitesse + accel)
+      * Sticky a hysteresis mais switch si menace nettement meilleure
+      * Presets Safe + Rage tout a fond, defaults au boot
+      * Garde v4.0: aim-first (jamais tir le frame d'acquire), peek wall
+
+    v4.0 — aim-first + peek wall:
+      * Aim avant tir: hardLock d'abord, fire seulement si lockFrames>=2
+        ou angle <= ~2.5° — jamais le meme frame que l'acquire
+      * Peek wall: LOS multi-parts (Head > UpperTorso > HRP > LowerTorso)
+        + ray qui touche n'importe quel limb ennemi = visible
+      * Garde 3.8: firing failsafe, sticky hysteresis, hardLock/frame,
+        VIM+click, ADS, full360, freeCam OFF — pas de spinbot
+
     v3.8 — RELIABILITY (trigger/cam/ADS/360 chaque frame):
-      * State.firing failsafe max 0.15s + watchdog 0.4s (plus de flag colle)
-      * full360: skip TOUS gates align/FOV — fire si cible valide + LOS
-      * sticky hysteresis 0.3s (vis flicker ne drop plus la cible)
-      * hardLockCamera CHAQUE frame tant que cible lockee
-      * Camera = CurrentCamera chaque frame (nil = skip once)
-      * ADS Aiming resync throttle tant que lock (pas de desync)
-      * full360 path unique: hardLock + doFire (pas freeCam flick)
-      * Tir: VIM press/release ET mouse1click a chaque fire
-      * settleLeft retire (plus de gate)
-
-    v3.7 — INSTANT ADS (visee arme jeu / scope RMB ~1s):
-      * Remote CharacterStateReplication.Aiming(true) + HumAttr Aiming
-      * Auto-hold RMB + snap FOV ADS (plus d'attente anim client si possible)
-      * Patch local AimSpeed/ScopeTime sur tool si present
-      * 360: ADS engage des qu'une cible est lockee
-      * HONNETE: anim Viewmodel peut rester; gate serveur = hors controle
-      * fireDelay/settle = 0 (script); aimSmoothing 0 sur hardLock
-
-    v3.6 — FIX 360: vise + tir (plus de cam libre cassee):
-      * full360: acquire sphere + hardLockCamera CONTINU sur la cible
-      * Auto doFire pendant le lock (pas de flick restore trop tot)
-      * freeCam OFF par defaut (toggle "Cam libre" optionnel)
-      * LOS = ray Head/HRP local (ennemis derriere OK, pas ViewportPoint)
-      * getBestTarget360: distance 3D only — Safe/Rage aim+trig+360 ON
+      * State.firing failsafe max 0.15s + watchdog 0.4s
+      * sticky hysteresis 0.3s · hardLock chaque frame · VIM+click
 
     BUILD 100% NO-HOOK (aucun hook executor -> aucun crash sur ce Xeno):
       * Tir = RAYCAST camera. Micro-flick CFrame (pas de Silent Aim hook).
-      * Retire: Silent Aim / Kill Aura (hooks -> crash Xeno).
 
-    Ennemis: Workspace.Characters
-      * plat:  Workspace.Characters.<username>
-      * duel:  Workspace.Characters.{uuid}.A|B.<username>
-      * model: HumanoidRootPart, Head, Humanoid (PredictedHealth/Health>0 = vivant)
-      * PAS de Teams Roblox -> l'equipe A/B vient du dossier ancetre "A"/"B".
-
-    Menu: touche  RightShift . Bouton UNLOAD dans le menu.
+    Ennemis: Workspace.Characters (plat / duel A|B). Menu: RightShift.
 ]]
 
 if getgenv and getgenv().__XHUB_SNIPER_STANDALONE then
@@ -67,7 +55,11 @@ local Camera = Workspace.CurrentCamera
 local FIXED_FOV = 120
 local ADS_FOV   = 40   -- FOV scope force (client). Jeu tween normalement ~1s.
 
-local VERSION = "3.8"
+local VERSION = "4.1"
+
+-- Aim-first gate (jamais tir le frame d'acquire)
+local LOCK_AIM_DEG    = 2.5   -- deg: vise deja sur hitbox
+local LOCK_MIN_FRAMES = 2     -- hardLock frames avant 1er tir
 
 ----------------------------------------------------------------------
 -- CONFIG (RAGE defaults — appliques apres choix boot; combat OFF tant que pas choisi)
@@ -106,7 +98,7 @@ local CFG = {
     espHealth      = true,
     espTracer      = false,
     espRainbow     = false,
-    espMaxDistance = 250,     -- max affichage / portee cible
+    espMaxDistance = 500,     -- max affichage / portee cible (genereux)
 
     -- PREDICT — RAGE max
     predEnabled      = true,
@@ -226,6 +218,7 @@ local State = {
     aligned       = false, -- la camera est alignee sur la tete (sous seuil)
     trigReady     = false, -- cooldown pret
     stickyVisOkAt = 0,     -- last sticky LOS OK (hysteresis full360)
+    stickyChallengeAt = 0, -- throttle IA switch-if-better (grosse IA)
     adsResyncAt   = 0,     -- last Aiming remote refresh while locked
     myTeamTag     = nil,
     renderBound   = false,
@@ -261,6 +254,9 @@ local State = {
     freeCam       = false,
     -- toast une seule fois au 1er tir 360 reussi
     first360FireToast = false,
+    -- aim-first lock (reset au switch de cible)
+    lockTargetId  = nil,   -- model actuellement hardLock
+    lockFrames    = 0,     -- RenderStepped frames de lock sur cette cible
     -- humanize SAFE (look only — fire window = exact head/predict)
     humPxOff      = Vector2.zero,
     humPxTarget   = Vector2.zero,
@@ -416,18 +412,24 @@ local function collectTargets(force)
     return State.targetsCache
 end
 
-local function getRayFilter()
+local function getRayFilter(keepModel)
+    -- Exclude local + autres joueurs. keepModel = ennemi a NE PAS exclure
+    -- (pour detecter un hit sur un limb = peek OK).
     local now = tick()
-    if State.rayFilter and (now - State.rayFilterAt) < State.targetsTTL then
+    if not keepModel and State.rayFilter and (now - State.rayFilterAt) < State.targetsTTL then
         return State.rayFilter
     end
     local models = {}
     if LocalPlayer.Character then models[#models + 1] = LocalPlayer.Character end
     for _, t in ipairs(collectTargets(false)) do
-        models[#models + 1] = t.model
+        if t.model ~= keepModel then
+            models[#models + 1] = t.model
+        end
     end
-    State.rayFilter = models
-    State.rayFilterAt = now
+    if not keepModel then
+        State.rayFilter = models
+        State.rayFilterAt = now
+    end
     return models
 end
 
@@ -441,9 +443,25 @@ local function aimPartOf(t)
     return t.head or t.root
 end
 
+-- Priorite visee peek: tete > torse > HRP > bas
+local PEEK_AIM_NAMES = { "Head", "UpperTorso", "Torso", "HumanoidRootPart", "LowerTorso" }
+
+local function modelOf(t, part)
+    if t and t.model then return t.model end
+    if part then
+        local m = part:FindFirstAncestorOfClass("Model")
+        if m then return m end
+    end
+    return nil
+end
+
 local function dropTarget(model)
     if not model then return end
     if State.currentTarget == model then State.currentTarget = nil end
+    if State.lockTargetId == model then
+        State.lockTargetId = nil
+        State.lockFrames = 0
+    end
     State.predTrack[model] = nil
     State.predSmooth[model] = nil
     State.targetsCache = nil
@@ -464,15 +482,6 @@ end
 ----------------------------------------------------------------------
 -- PREDICT mouvement — vitesse lisse + lead balistique
 ----------------------------------------------------------------------
-local function modelOf(t, part)
-    if t and t.model then return t.model end
-    if part then
-        local m = part:FindFirstAncestorOfClass("Model")
-        if m then return m end
-    end
-    return nil
-end
-
 local function sampleVelocity(model, part, root)
     local vel = Vector3.zero
     local acc = Vector3.zero
@@ -605,7 +614,7 @@ local function prunePredTrack()
     end
 end
 
--- WALL CHECK avec cache court (1 raycast max par part / ~0.12s)
+-- WALL CHECK (peek OK): ray vers part; nil OU hit sur l'ennemi = visible
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 rayParams.IgnoreWater = true
@@ -625,66 +634,155 @@ local function losOrigin()
     return Camera and Camera.CFrame.Position or Vector3.zero
 end
 
+-- Ray: clear path OR hits any descendant of enemyModel (demi-mur / peek)
+local function losClearOrPeek(origin, worldPos, enemyModel)
+    local dir = worldPos - origin
+    if dir.Magnitude < 0.01 then return true end
+    rayParams.FilterDescendantsInstances = getRayFilter(enemyModel)
+    local ok, res = pcall(function()
+        return Workspace:Raycast(origin, dir, rayParams)
+    end)
+    if not ok then return true end
+    if res == nil then return true end
+    if enemyModel and res.Instance and res.Instance:IsDescendantOf(enemyModel) then
+        return true
+    end
+    return false
+end
+
 local function isVisible(part, worldPos, t)
     if not CFG.visibleOnly then return true end
     if not part or not part.Parent then return false end
+    local model = modelOf(t, part)
     worldPos = worldPos or aimWorldPos(t, part) or part.Position
     local origin = losOrigin()
-    if CFG.predEnabled then
-        local model = modelOf(t, part)
-        local tr = model and State.predTrack[model]
-        if tr and tr.vel.Magnitude > 2 then
-            local dir = worldPos - origin
-            if dir.Magnitude < 0.01 then return true end
-            rayParams.FilterDescendantsInstances = getRayFilter()
-            local ok, res = pcall(function() return Workspace:Raycast(origin, dir, rayParams) end)
-            return (not ok) or res == nil
-        end
-    end
-    -- full360: pas de cache ecran-dependant — LOS corps peut changer vite en rotation
     local now = tick()
     if not CFG.full360 then
         local c = State.visCache[part]
         if c and (now - c.t) < State.visCacheTTL then return c.ok end
     end
-    local dir = worldPos - origin
-    if dir.Magnitude < 0.01 then
-        if not CFG.full360 then State.visCache[part] = { t = now, ok = true } end
-        return true
-    end
-    rayParams.FilterDescendantsInstances = getRayFilter()
-    local ok, res = pcall(function() return Workspace:Raycast(origin, dir, rayParams) end)
-    local vis = (not ok) or res == nil
+    local vis = losClearOrPeek(origin, worldPos, model)
     if not CFG.full360 then State.visCache[part] = { t = now, ok = vis } end
     return vis
 end
 
--- Meilleure cible: plus proche du crosshair DANS le FOV (tiebreak 3D),
--- respecte teamCheck, maxDistance et wall-check.
-local function acquireTarget(fov, needVisible)
-    fov = fov or CFG.aimFov
+-- 1ere part visible (Head > torso > HRP). Predict sur CETTE part.
+local function pickVisibleAimPart(t)
+    if not t or not t.model then return nil end
+    local model = t.model
+    local origin = losOrigin()
+    for _, name in ipairs(PEEK_AIM_NAMES) do
+        local part = model:FindFirstChild(name)
+        if part and part:IsA("BasePart") then
+            local ap = aimWorldPos(t, part) or part.Position
+            if losClearOrPeek(origin, ap, model) then
+                return part
+            end
+        end
+    end
+    return nil
+end
+
+-- Part a viser: peek multi-parts si wall ON, sinon preference CFG
+local function resolveAimPart(t)
+    if not t or not t.model then return nil end
+    if CFG.visibleOnly then
+        local peek = pickVisibleAimPart(t)
+        if peek then return peek end
+        return nil
+    end
+    return aimPartOf(t)
+end
+
+----------------------------------------------------------------------
+-- GROSSE IA — cerveau cible (scoring multi-critere)
+-- Choisit la meilleure cible: part visible (tete>torse>HRP), HP bas,
+-- proche, ennemi qui nous vise. Sticky avec switch si menace superieure.
+----------------------------------------------------------------------
+-- Bonus par part visee (peek) — la tete vaut le plus
+local PART_SCORE = {
+    Head = 45, UpperTorso = 24, Torso = 24, HumanoidRootPart = 15, LowerTorso = 12,
+}
+
+-- 0..1 : a quel point l'ennemi nous regarde/vise (menace)
+local function threatFacingMe(t, mr)
+    if not mr or not t then return 0 end
+    local lookPart = t.head or t.root
+    if not lookPart or not lookPart:IsA("BasePart") then return 0 end
+    local ok, cf = pcall(function() return lookPart.CFrame end)
+    if not ok or not cf then return 0 end
+    local toMe = mr.Position - lookPart.Position
+    if toMe.Magnitude < 0.01 then return 1 end
+    local dot = cf.LookVector:Dot(toMe.Unit)
+    return math.clamp(dot, 0, 1)
+end
+
+-- Score d'une cible (plus haut = meilleur). Combine distance, HP, part, menace.
+local function scoreTarget(t, part, mr)
+    if not t or not part then return -math.huge end
+    local ap = aimWorldPos(t, part) or part.Position
+    if not ap then return -math.huge end
+    local dist = mr and (ap - mr.Position).Magnitude or 9999
+    if dist > maxDist() then return -math.huge end
+
+    local score = 1000
+    -- proximite: plus proche = mieux
+    score = score - dist * 1.4
+    -- part visee preferee (tete en priorite)
+    score = score + (PART_SCORE[part.Name] or 10)
+    -- HP bas = on finit le kill
+    local hp, maxHp = getHealth(t.hum)
+    local ratio = math.clamp(hp / math.max(maxHp, 1), 0, 1)
+    score = score + (1 - ratio) * 65
+    -- menace: ennemi qui nous vise = priorite
+    score = score + threatFacingMe(t, mr) * 50
+    return score
+end
+
+-- Selection IA unifiee. opts.useFov = cone ecran (mode classique).
+local function pickTargetAI(opts)
+    opts = opts or {}
+    local needVisible = opts.needVisible
     if needVisible == nil then needVisible = true end
+    local useFov = opts.useFov
+    local fov = opts.fov or CFG.aimFov
+    Camera = Workspace.CurrentCamera
+    if not Camera then return nil, nil, -math.huge end
     local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-    local best, bestPart, bestScreen, best3D = nil, nil, math.huge, math.huge
     local mr = myRootPart()
+    local best, bestPart, bestScore = nil, nil, -math.huge
+
     for _, t in ipairs(collectTargets(false)) do
         if not (CFG.teamCheck and t.sameTeam) then
-            local part = aimPartOf(t)
+            local part
+            if needVisible and CFG.visibleOnly then
+                part = pickVisibleAimPart(t)
+            else
+                part = aimPartOf(t)
+                if needVisible and part and not isVisible(part, aimWorldPos(t, part), t) then
+                    part = nil
+                end
+            end
             if part then
                 local ap = aimWorldPos(t, part)
-                local d3 = mr and (ap - mr.Position).Magnitude or 0
-                if d3 <= maxDist() then
-                    local sp, on = Camera:WorldToViewportPoint(ap)
-                    if on and sp.Z > 0 then
-                        local d2 = (Vector2.new(sp.X, sp.Y) - center).Magnitude
-                        if d2 <= fov then
-                            local vis = (not needVisible) or isVisible(part, ap, t)
-                            if vis then
-                                -- priorite crosshair, tiebreak distance 3D
-                                if d2 < bestScreen - 0.5
-                                   or (math.abs(d2 - bestScreen) <= 0.5 and d3 < best3D) then
-                                    bestScreen = d2; best3D = d3; best = t; bestPart = part
-                                end
+                if ap then
+                    local d3 = mr and (ap - mr.Position).Magnitude or math.huge
+                    if d3 <= maxDist() then
+                        local screenOk, d2 = true, 0
+                        if useFov then
+                            local sp, on = Camera:WorldToViewportPoint(ap)
+                            if on and sp.Z > 0 then
+                                d2 = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+                                screenOk = d2 <= fov
+                            else
+                                screenOk = false
+                            end
+                        end
+                        if screenOk then
+                            local s = scoreTarget(t, part, mr)
+                            if useFov then s = s - d2 * 0.05 end -- prefere pres du crosshair
+                            if s > bestScore then
+                                bestScore = s; best = t; bestPart = part
                             end
                         end
                     end
@@ -692,39 +790,49 @@ local function acquireTarget(fov, needVisible)
             end
         end
     end
+    return best, bestPart, bestScore
+end
+
+-- Sticky challenge: garde la cible sauf si une autre est NETTEMENT meilleure.
+local STICKY_SWITCH_MARGIN = 90
+local function challengeSticky(t, part)
+    if not t or not part then return t, part end
+    local now = tick()
+    if now - (State.stickyChallengeAt or 0) < 0.15 then return t, part end
+    State.stickyChallengeAt = now
+    local mr = myRootPart()
+    local sScore = scoreTarget(t, part, mr)
+    local best, bestPart, bScore = pickTargetAI({
+        needVisible = true, useFov = (not CFG.full360), fov = CFG.aimReleaseFov,
+    })
+    if best and bestPart and best.model ~= t.model
+       and bScore > sScore + STICKY_SWITCH_MARGIN then
+        State.currentTarget = best.model
+        State.stickyVisOkAt = now
+        State.lockTargetId = nil
+        State.lockFrames = 0
+        return best, bestPart
+    end
+    return t, part
+end
+
+-- Meilleure cible: plus proche du crosshair DANS le FOV (tiebreak 3D),
+-- respecte teamCheck, maxDistance et wall-check peek.
+local function acquireTarget(fov, needVisible)
+    fov = fov or CFG.aimFov
+    if needVisible == nil then needVisible = true end
+    local best, bestPart = pickTargetAI({ needVisible = needVisible, useFov = true, fov = fov })
     return best, bestPart
 end
 
--- 360: scan TOUS les joueurs dans la sphere. Score = distance 3D ONLY.
--- Aucun FOV / ViewportPoint / facing — derriere = eligible si LOS corps.
+-- 360: scan sphere. IA scoring complet (peek multi-parts, HP, menace).
 local function getBestTarget360(needVisible)
     if needVisible == nil then needVisible = true end
-    local best, bestPart, bestDist = nil, nil, math.huge
-    local mr = myRootPart()
-    for _, t in ipairs(collectTargets(false)) do
-        if not (CFG.teamCheck and t.sameTeam) then
-            local part = aimPartOf(t)
-            if part then
-                local ap = aimWorldPos(t, part)
-                if ap then
-                    local d3 = mr and (ap - mr.Position).Magnitude or math.huge
-                    if d3 <= maxDist() then
-                        local vis = (not needVisible) or isVisible(part, ap, t)
-                        if vis and d3 < bestDist then
-                            bestDist = d3
-                            best = t
-                            bestPart = part
-                        end
-                    end
-                end
-            end
-        end
-    end
+    local best, bestPart = pickTargetAI({ needVisible = needVisible, useFov = false })
     return best, bestPart
 end
 
--- Cible sticky : garde la meme tant que vivante / dans releaseFov / a portee / visible / pas ally.
--- full360: ignore releaseFov ecran — garde tant que range + mur + equipe OK.
+-- Cible sticky : garde la meme tant que vivante / range / peek-visible / pas ally.
 -- full360 hysteresis: brief vis fail (0.3s) ne drop PAS la sticky.
 local STICKY_VIS_GRACE = 0.3
 local function stickyTarget()
@@ -742,26 +850,27 @@ local function stickyTarget()
                     end
                 end
                 if not (CFG.teamCheck and t.sameTeam) then
-                    local part = aimPartOf(t)
+                    local part = resolveAimPart(t) or aimPartOf(t)
                     local mr = myRootPart()
                     if part and mr then
                         local ap = aimWorldPos(t, part)
                         if ap and (ap - mr.Position).Magnitude <= maxDist() then
                             if CFG.full360 then
-                                if isVisible(part, ap, t) then
+                                if isVisible(part, ap, t) or (CFG.visibleOnly and pickVisibleAimPart(t)) then
+                                    local vp = pickVisibleAimPart(t) or part
                                     State.stickyVisOkAt = tick()
-                                    return t, part
+                                    return challengeSticky(t, vp)
                                 elseif (tick() - (State.stickyVisOkAt or 0)) < STICKY_VIS_GRACE then
-                                    -- vis flicker: garder sticky encore un moment
-                                    return t, part
+                                    return challengeSticky(t, part)
                                 end
                             else
                                 local sp, on = Camera:WorldToViewportPoint(ap)
                                 local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+                                local vp = pickVisibleAimPart(t) or part
                                 if on and sp.Z > 0
                                    and (Vector2.new(sp.X, sp.Y) - center).Magnitude <= CFG.aimReleaseFov
-                                   and isVisible(part, ap, t) then
-                                    return t, part
+                                   and (not CFG.visibleOnly or pickVisibleAimPart(t)) then
+                                    return challengeSticky(t, vp)
                                 end
                             end
                         end
@@ -773,6 +882,8 @@ local function stickyTarget()
         end
         State.currentTarget = nil
         State.stickyVisOkAt = 0
+        State.lockTargetId = nil
+        State.lockFrames = 0
     end
     local t, part
     if CFG.full360 then
@@ -790,7 +901,7 @@ end
 ----------------------------------------------------------------------
 -- CAMERA LOCK (lissage) + humanize SAFE (DISPLAY only)
 -- Safe: gauss / Bezier / drift / smooth pour le LOOK entre les tirs.
--- Fire window: aimFirePos exact (tete+predict) — 0 miss, pas de offset.
+-- Fire window: aimFirePos exact (part visible + predict) — 0 miss.
 ----------------------------------------------------------------------
 local function myCharacterRoot()
     local c = LocalPlayer.Character
@@ -987,6 +1098,31 @@ local function aimAngleTo(t, part)
     return math.deg(math.acos(dot))
 end
 
+-- Compteur hardLock / cible — reset au switch
+local function noteAimLock(tgt, part)
+    local id = tgt and tgt.model or nil
+    if not id or not part then
+        State.lockTargetId = nil
+        State.lockFrames = 0
+        return
+    end
+    if id ~= State.lockTargetId then
+        State.lockTargetId = id
+        State.lockFrames = 0
+    end
+    State.lockFrames = (State.lockFrames or 0) + 1
+end
+
+-- Aim-first: jamais tir le frame d'acquire. OK si angle <= 2.5° OU lockFrames >= 2
+local function aimLockReady(tgt, part)
+    if not tgt or not part then return false end
+    if tgt.model ~= State.lockTargetId then return false end
+    local frames = State.lockFrames or 0
+    if frames < LOCK_MIN_FRAMES then return false end
+    local ang = aimAngleTo(tgt, part)
+    return ang <= LOCK_AIM_DEG or frames >= LOCK_MIN_FRAMES
+end
+
 -- La tete est-elle DANS le rayon trigFov a l'ecran ?
 -- Gate sur aimFirePos (stable) — humanize ne doit jamais faire rater le gate.
 -- full360: gate ignoree (acquisition sphere).
@@ -1002,17 +1138,19 @@ local function withinTrigFov(t, part)
     return (Vector2.new(sp.X, sp.Y) - center).Magnitude <= CFG.trigFov
 end
 
--- Pret a tirer — gates sur aimFirePos exact (0 miss)
--- full360: AUCUN gate align/FOV — seulement cible valide + LOS
+-- Pret a tirer — gates sur aimFirePos exact (0 miss) + peek LOS
+-- full360: pas de FOV; aim-first gere dans stepEngage (lockFrames)
 local function triggerCanFire(t, part)
     if not isTargetValid(t, part) then return false end
     if CFG.full360 then
         local ap = aimFirePos(t, part)
         if not ap then return false end
-        -- pendant sticky grace, on tire quand meme si part encore valide
         if CFG.visibleOnly and not isVisible(part, ap, t) then
-            if (tick() - (State.stickyVisOkAt or 0)) >= STICKY_VIS_GRACE then
-                return false
+            -- peek: re-check multi-parts (torso visible meme si head occluse)
+            if not pickVisibleAimPart(t) then
+                if (tick() - (State.stickyVisOkAt or 0)) >= STICKY_VIS_GRACE then
+                    return false
+                end
             end
         end
         return true
@@ -1020,7 +1158,9 @@ local function triggerCanFire(t, part)
     if not withinTrigFov(t, part) then return false end
     local ap = aimFirePos(t, part)
     if not ap then return false end
-    if not isVisible(part, ap, t) then return false end
+    if CFG.visibleOnly and not isVisible(part, ap, t) and not pickVisibleAimPart(t) then
+        return false
+    end
     if CFG.trigHardSnap then
         return aimAngleTo(t, part) <= CFG.alignThreshold
     end
@@ -1631,6 +1771,7 @@ end
 
 ----------------------------------------------------------------------
 -- ENGAGE : 360 = sphere + lock cam + tir auto | sinon FOV + RMB
+-- Ordre: acquire → hardLock → noteAimLock → fire si aimLockReady
 ----------------------------------------------------------------------
 local function stepEngage()
     if not State.bootReady then return end
@@ -1645,6 +1786,8 @@ local function stepEngage()
 
     if not aimActive() and not CFG.trigEnabled then
         State.locked = false
+        State.lockTargetId = nil
+        State.lockFrames = 0
         syncGameAds()
         return
     end
@@ -1660,7 +1803,7 @@ local function stepEngage()
     local tgt, part
     local free = freeCamActive()
 
-    -- ─── 360 Auto: acquire sphere, VISE (hardLock CHAQUE frame), tir auto ───
+    -- ─── 360 Auto: acquire → hardLock CHAQUE frame → fire si lock pret ───
     if CFG.full360 then
         if not CFG.aimEnabled and not CFG.trigEnabled then
             syncGameAds()
@@ -1668,18 +1811,25 @@ local function stepEngage()
         end
         tgt, part = stickyTarget()
         if not part or not part.Parent or not isTargetValid(tgt, part) then
+            State.lockTargetId = nil
+            State.lockFrames = 0
             syncGameAds()
             return
         end
+        -- Prefer part visible (peek) chaque frame
+        if CFG.visibleOnly then
+            part = pickVisibleAimPart(tgt) or part
+        end
         State.locked = true
-        State.aligned = true -- full360: pas de gate align
         syncGameAds()
         prunePredTrack()
 
-        -- MUST lock cam every frame while target locked (pas seulement wantFire)
+        -- 1) hardLock FIRST (jamais fire avant)
         if not free then
             hardLockCamera(tgt, part)
         end
+        noteAimLock(tgt, part)
+        State.aligned = aimAngleTo(tgt, part) <= LOCK_AIM_DEG
 
         -- Watchdog: locked + trig ON + pas de tir depuis 0.4s → clear firing + retry
         if CFG.trigEnabled and (tick() - State.lastFire) >= FIRE_WATCHDOG_SEC then
@@ -1690,13 +1840,12 @@ local function stepEngage()
         local wantFire = CFG.trigEnabled
             and State.trigReady
             and triggerCanFire(tgt, part)
+            and aimLockReady(tgt, part)
 
         if wantFire then
             if free then
-                -- Optionnel "Cam libre": flick (moins fiable)
                 flickFire(tgt, part)
             else
-                -- DEFAUT fiable: hardLock deja fait + doFire (VIM + mouse1click)
                 if doFire() then
                     local name = (tgt and tgt.model and tgt.model.Name) or "?"
                     dbg360("360 lock-fire " .. name)
@@ -1719,8 +1868,13 @@ local function stepEngage()
         State.humBezierT = 0
         State.humLastLook = nil
         State.humOverUntil = 0
+        State.lockTargetId = nil
+        State.lockFrames = 0
         syncGameAds()
         return
+    end
+    if CFG.visibleOnly then
+        part = pickVisibleAimPart(tgt) or part
     end
     State.locked = true
     syncGameAds()
@@ -1732,33 +1886,28 @@ local function stepEngage()
         State.trigReady = true
     end
 
-    local wantFire = CFG.trigEnabled
-        and State.trigReady
-        and (not CFG.trigOnlyWhenLocked or armed)
-        and triggerCanFire(tgt, part)
-
-    -- hardLock chaque frame si wantFire OU armed (cible presente)
-    if wantFire or armed then
-        if wantFire or CFG.trigHardSnap then
+    -- 1) Aim first chaque frame si armed / on va tirer
+    if armed or CFG.trigEnabled then
+        if CFG.trigHardSnap or CFG.trigEnabled then
             hardLockCamera(tgt, part)
         else
             snapCamera(tgt, part, CFG.aimSmoothing)
         end
     end
+    noteAimLock(tgt, part)
 
     State.aligned = withinTrigFov(tgt, part)
     if CFG.trigHardSnap then
         State.aligned = aimAngleTo(tgt, part) <= CFG.alignThreshold
     end
 
-    if not CFG.trigEnabled then return end
-    if not State.trigReady then return end
-    if CFG.trigOnlyWhenLocked and not armed then return end
-    if not wantFire then return end
+    local wantFire = CFG.trigEnabled
+        and State.trigReady
+        and (not CFG.trigOnlyWhenLocked or armed)
+        and triggerCanFire(tgt, part)
+        and aimLockReady(tgt, part)
 
-    if CFG.trigHardSnap then
-        if aimAngleTo(tgt, part) > CFG.alignThreshold then return end
-    end
+    if not wantFire then return end
 
     doFire()
 end
@@ -1789,6 +1938,8 @@ State.conns[#State.conns + 1] = LocalPlayer.CharacterAdded:Connect(function()
     State.predTrack = {}
     State.predSmooth = {}
     State.currentTarget = nil
+    State.lockTargetId = nil
+    State.lockFrames = 0
     task.defer(function()
         resolveMyTeamTag(true)
     end)
@@ -1879,7 +2030,7 @@ sub.BackgroundTransparency = 1
 sub.Font = Enum.Font.Gotham
 sub.TextSize = UI_TEXT
 sub.TextColor3 = UI_TXT_DIM
-sub.Text = "v" .. VERSION .. " - FOV 120 - RightShift"
+sub.Text = "v" .. VERSION .. " · IA · aim-first · peek"
 sub.Parent = frame
 
 local modeBadge = Instance.new("TextLabel")
@@ -1942,7 +2093,7 @@ addToggle("ADS auto au lock", "autoAdsOnLock")
 addToggle("Aimbot", "aimEnabled")
 addToggle("Trigger", "trigEnabled")
 addToggle("Predict", "predEnabled")
-addToggle("Mur (wall)", "visibleOnly")
+addToggle("Mur (peek OK)", "visibleOnly")
 addToggle("Equipe A/B", "teamCheck")
 addToggle("ESP", "espEnabled")
 addToggle("Cercle FOV", "showFovCircle")
@@ -1998,7 +2149,7 @@ bootSub.Font = Enum.Font.Gotham
 bootSub.TextSize = 9
 bootSub.TextColor3 = UI_TXT_DIM
 bootSub.TextWrapped = true
-bootSub.Text = "SAFE / RAGE · ADS instant + 360° + tir"
+bootSub.Text = "SAFE / RAGE · grosse IA + aim-first + peek"
 bootSub.Parent = bootGui
 
 local function makeBootBtn(text, bg, order)
@@ -2065,6 +2216,8 @@ local function applyRagePreset()
     State.humOverUntil = 0
     State.humPxOff = Vector2.zero
     State.humPxTarget = Vector2.zero
+    State.lockTargetId = nil
+    State.lockFrames = 0
 end
 
 local function applySafePreset()
@@ -2110,6 +2263,8 @@ local function applySafePreset()
     CFG.safeSmoothTime = 0.12 + math.random() * 0.06
     CFG.safeBezierSec = 0.16 + math.random() * 0.08
     CFG.safeOvershootP = 0.008 + math.random() * 0.006
+    State.lockTargetId = nil
+    State.lockFrames = 0
     retargetHumPixels()
 end
 
@@ -2123,14 +2278,14 @@ local function startScriptMode(mode)
     end
     if mode == "safe" then
         applySafePreset()
-        modeBadge.Text = "MODE: SAFE · ADS instant · 360°"
+        modeBadge.Text = "MODE: SAFE · IA · aim-first · peek"
         modeBadge.TextColor3 = Color3.fromRGB(40, 120, 70)
-        sub.Text = "v" .. VERSION .. " SAFE - ADS instant · lock · tir auto"
+        sub.Text = "v" .. VERSION .. " SAFE · IA · aim-first"
     else
         applyRagePreset()
-        modeBadge.Text = "MODE: RAGE · ADS instant · 360°"
+        modeBadge.Text = "MODE: RAGE · IA · aim-first · peek"
         modeBadge.TextColor3 = Color3.fromRGB(160, 70, 50)
-        sub.Text = "v" .. VERSION .. " RAGE - ADS instant · lock · tir auto"
+        sub.Text = "v" .. VERSION .. " RAGE · IA · aim-first"
     end
     bootGui.Visible = false
     pcall(function() bootGui:Destroy() end)
@@ -2142,8 +2297,8 @@ local function startScriptMode(mode)
     pcall(function()
         StarterGui:SetCore("SendNotification", {
             Title = "UNDETEK Sniper v" .. VERSION,
-            Text = "v3.8 fiabilite: lock+tir chaque frame. RightShift = menu.",
-            Duration = 6,
+            Text = "v4.1 tout au max + grosse IA. RightShift = menu.",
+            Duration = 5,
         })
     end)
 end
