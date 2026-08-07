@@ -1,27 +1,35 @@
-﻿# UNDETEK xhub
+﻿# UNDETEK xhub — Sniper Duels
 
-Layered runtime payload for **Sniper Duels**.
+Free standalone script. No hub. No key.
 
-Built around a multi-pass encode pipeline and a late-bind execution path — the surface you see is not the surface that runs. Internals stay closed.
+[-- UNDETEK xhub Supported Games --]
+[+] Sniper Duels
 
-## What it does
+[-- Features --]
+[+] Aimbot silent (no-hook)
+[+] Triggerbot
+[+] Prediction
+[+] ESP
+[+] FOV lock
+[+] Rayfield UI
+[+] 100% standalone (no hub)
 
-Aim · Trigger · Predict · ESP · FOV lock — packed into one drop-in load.
+[-- Suggested Executors --]
+PC: Xeno, Volt, Solara
+MOBILE: Delta, Codex
 
-## Load
+[-- Links --]
+GitHub: https://github.com/jvd11665-dot/UNDETEK-xhub-sniper
+Raw: https://raw.githubusercontent.com/jvd11665-dot/UNDETEK-xhub-sniper/main/script.lua
+Discord: https://discord.gg/cgRsTMUa9J
+Site: https://xhub.blog/library#/games/sniper-duels
 
+[-- Loadstring --]
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/jvd11665-dot/UNDETEK-xhub-sniper/main/script.lua"))()
 ```
 
-RightShift opens the panel. UNLOAD tears it down.
+[-- Tags --]
+sniper duels, aimbot, triggerbot, predict, esp, undetek, xhub, roblox script, free script
 
-## Notes
-
-- Executor: Xeno (and most HttpGet-capable clients)
-- Place: Sniper Duels only
-- No hub dependency. One shot. Done.
-
----
-
-*Complexity is the point. Clarity is not.*
+*UNDETEK xhub — free scripts.*
