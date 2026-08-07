@@ -1,15 +1,15 @@
 # UNDETEK xhub — Sniper Duels
 
 Free standalone script · open source · non-obfusqué. No hub. No key.
-PlaceId `109397169461300` · **v3.3**
+PlaceId `109397169461300` · **v3.4**
 
 [-- UNDETEK xhub Supported Games --]
 [+] Sniper Duels
 
 [-- Features --]
 [+] Boot : Start Safe Script | Start Rage Script
-[+] Mode Safe — visée humanisée, toujours précise
-[+] Mode Rage — snap agressif
+[+] Mode Safe — visée humanisée, toujours précise (0 miss)
+[+] Mode Rage — FOV 999 à fond · snap · predict max
 [+] Aimbot caméra + Triggerbot
 [+] Predict + range track
 [+] ESP (box / nom / vie · 250 studs)
