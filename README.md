@@ -1,27 +1,33 @@
 ﻿# UNDETEK xhub — Sniper Duels
 
-Free standalone script · build protégé (obfusqué). No hub. No key.
-PlaceId `109397169461300` · **v5.0**
+Standalone script · No hub · No key.
+PlaceId `109397169461300` · **v6.0**
 
 [-- UNDETEK xhub Supported Games --]
 [+] Sniper Duels
 
-[-- Features --]
+[-- Features (v6.0) --]
 [+] Boot : Start Safe Script | Start Rage Script
-[+] **v3.8 reliability** — trigger / cam / ADS / 360 chaque frame (plus de “1 fois sur 2”)
-[+] **ADS instant** (Aiming remote + HumAttr + FOV snap — tente de skip le ~1s scope jeu)
-[+] **360° auto · hardLock cam · tir auto** (Safe + Rage · freeCam OFF)
-[+] Capture autour de toi (pas seulement le FOV viseur)
+[+] **360° au MAX + FIABLE** — acquire + hardLock chaque frame, tir 1 frame (~0ms),
+    hysteresis LOS 0.45s (ne lâche plus la cible sur micro-perte de vue) — RAGE
+[+] **0ms** — smoothing 0 · cooldown 0 · fireDelay 0 · FOV 999
+[+] **ANTI-FREEZE** — filtre LOS stable + budget raycast/frame + cache peek/vis
+    (fini les gels ~3s ; plus de reconstruction de liste à chaque ray)
+[+] **FOV Wipe Parts (BETA)** — dissocie + supprime les BaseParts devant la cam
+    (FOV perso + limite en studs · JAMAIS de Model/Tool/Character · batch anti-lag
+    via GetPartBoundsInRadius, pas de GetDescendants du Workspace)
+[+] **ADS instant** (Aiming remote + HumAttr + FOV snap — skip le ~1s scope jeu)
+[+] Grosse IA cible (part visible tête>torse>HRP · HP bas · menace · plus proche)
 [+] Tir VIM + mouse1click · firing failsafe 0.15s · sticky hysteresis
-[+] Mode Safe / Rage + Predict + range track
-[+] ESP (box / nom / vie · 250 studs)
-[+] UI blanche compacte · RightShift · UNLOAD
+[+] Mode Safe (FOV humanisé) / Rage (360 MAX) + Predict + range track
+[+] ESP (box / nom / vie) · UI blanche compacte · RightShift · UNLOAD
 
 [-- Honest limits --]
+[-] FOV Wipe = BETA — parts uniquement (jamais de Model), limité en studs
 [-] ADS instant = attempt client (remote Aiming). Anim Viewmodel / gate serveur peuvent rester
 [-] Cam libre = optionnel, moins fiable ; défaut = lock continu
 [-] Pas de Silent Aim / Kill Aura / Spinbot (chemins instables ou trop flag)
-[-] Optimisé pour Xeno (standalone)
+[-] Optimisé pour Xeno (standalone) · script publié obfusqué
 
 [-- Suggested Executors --]
 PC: Xeno, Volt, Solara
