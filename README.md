@@ -1,21 +1,22 @@
 ﻿# UNDETEK xhub — Sniper Duels
 
 Standalone script · No hub · No key.
-PlaceId `109397169461300` · **v6.1**
+PlaceId `109397169461300` · **v6.2**
 
 [-- UNDETEK xhub Supported Games --]
 [+] Sniper Duels
 
-[-- Features (v6.1) --]
+[-- Features (v6.2) --]
 [+] Boot : Start Safe Script | Start Rage Script
 [+] **360° au MAX + FIABLE** — acquire + hardLock chaque frame, tir 1 frame (~0ms),
     hysteresis LOS 0.45s (ne lâche plus la cible sur micro-perte de vue) — RAGE
 [+] **0ms** — smoothing 0 · cooldown 0 · fireDelay 0 · FOV aim/trig 999
 [+] **ANTI-FREEZE** — filtre LOS stable + budget raycast/frame + cache peek/vis
-[+] **FOV Wipe Parts (BETA) v6.1** — FOV wipe **séparé** de aim/trig (défaut 90 px / 40 studs,
-    caps 200 / 100) · boutons cycle menu · cercle orange dédié
-[+] **Anti fall-through** — ne détruit jamais Baseplate/Terrain/sol/route/map/grass,
-    plaques plates larges, ni parts max-axe ≥ 25 · BasePart only + batch
+[+] **FOV Wipe Parts (BETA) v6.2** — hide **temporaire** (pas Destroy) · réapparition
+    après `wipeRespawnSec` (défaut **8s**, cycle 5/8/12/20) · anti collision fantôme
+    (CanCollide/CanTouch/CanQuery=false avant hide) · FOV wipe séparé (90 px / 40 studs)
+[+] **Anti fall-through** — ne touche jamais Baseplate/Terrain/sol/route/map/grass,
+    plaques plates larges, ni parts max-axe ≥ 25 · BasePart only + batch + cap concurrent
 [+] **ADS instant** (Aiming remote + HumAttr + FOV snap — skip le ~1s scope jeu)
 [+] Grosse IA cible (part visible tête>torse>HRP · HP bas · menace · plus proche)
 [+] Tir VIM + mouse1click · firing failsafe 0.15s · sticky hysteresis
