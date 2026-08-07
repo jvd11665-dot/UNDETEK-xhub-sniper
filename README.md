@@ -8,7 +8,8 @@ PlaceId `109397169461300` · **Combat v8.1** · **Autofarm v1.0**
 
 [-- Two scripts (separated) --]
 [+] `script.lua` — **combat only** v8.1 (aim / trigger / ESP / predict / dodge / slide)
-[+] `autofarm.lua` — **lobby queue loop** (PLAY DUELS → 1v1 only → QUEUE → RETURN)
+[+] `autofarm.lua` **v1.1** — **lobby queue loop** (PLAY DUELS → 1v1 only → QUEUE → RETURN)
+    Soft PlaceId (lobby UI OK), robust button find/click, debug toasts + F9 logs
 
 Hunt/Chase pathfinding was **removed from combat** (micro-lag). Optional cover/hunt lives in autofarm, throttled (repath ~1.5s, ComputeAsync off hot path).
 
