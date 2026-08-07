@@ -6,8 +6,15 @@
     UI blanche compacte, RightShift.
     100% standalone (no hub / no HttpGet), executor Xeno.
 
-    VERSION: 3.3 (2026-08-07)
+    VERSION: 3.4 (2026-08-07)
     CIBLE: Roblox "Sniper Duels" (place 109397169461300) • Executor: Xeno
+
+    v3.4 — Rage FOV / aggro a fond:
+      * aimFov / trigFov / aimReleaseFov = 999 (ecran entier, px)
+      * sticky ON · smooth 0 · cooldown 0 · predict + range track max
+      * Camera FieldOfView 120 (max Roblox) apres Start Rage
+      * Cercle FOV = rayon aim/trig reel (999)
+      * Safe inchange: humanise + 0 miss
 
     v3.3 — Safe = humanise + 0 miss (aussi fort / mieux que Rage):
       * Split aimDisplayPos (camera humanisee) vs aimFirePos (tete+predict exact)
@@ -85,7 +92,7 @@ local Camera = Workspace.CurrentCamera
 -- FOV camera forcee a 120 deg (max Roblox) au lancement — non reglable menu
 local FIXED_FOV = 120
 
-local VERSION = "3.3"
+local VERSION = "3.4"
 
 ----------------------------------------------------------------------
 -- CONFIG (RAGE defaults — appliques apres choix boot; combat OFF tant que pas choisi)
@@ -96,8 +103,8 @@ local CFG = {
     aimAlways      = false,
     aimHoldMouse2  = true,
     aimSmoothing   = 0,       -- 0 = snap max (reactif) — RAGE
-    aimFov         = 500,     -- max slider
-    aimReleaseFov  = 550,     -- sticky large (>= aimFov)
+    aimFov         = 999,     -- ecran entier (px) — RAGE a fond
+    aimReleaseFov  = 999,     -- sticky = meme plafond
     aimPart        = "Head",
     aimSticky      = true,
     aimMouseNudge  = false,
@@ -105,12 +112,12 @@ local CFG = {
 
     -- TRIGGERBOT — defaults MAX (RAGE)
     trigEnabled       = false,  -- active apres boot
-    trigFov           = 120,    -- max slider px
+    trigFov           = 999,    -- ecran entier (px) — RAGE a fond
     trigCooldown      = 0,      -- min = tir le plus rapide
-    fireDelay         = 0.02,   -- min
+    fireDelay         = 0.02,   -- min (clamp code >= 0.02)
     alignThreshold    = 8.0,    -- max (hard snap)
     trigOnlyWhenLocked= false,
-    trigHardSnap      = false,
+    trigHardSnap      = true,   -- RAGE: snap dur avant tir
     trigSettleFrames  = 0,
     trigScopeDelay    = 0,
 
@@ -126,22 +133,22 @@ local CFG = {
     espRainbow     = false,
     espMaxDistance = 250,     -- max affichage / portee cible
 
-    -- PREDICT — calme (evite viser partout)
+    -- PREDICT — RAGE max
     predEnabled      = true,
-    predScale        = 1.0,
+    predScale        = 1.25,
     predBulletSpeed  = 2800,
-    predExtraMs      = 35,
-    predAccel        = false, -- acc = bruit -> visée folle
-    predIter         = 2,
-    predMaxStuds     = 5.5,   -- plafond lead (studs)
-    predMaxSpeed     = 48,    -- vitesse max comptee (anti-spike)
+    predExtraMs      = 45,
+    predAccel        = true,  -- RAGE: accel lead ON
+    predIter         = 3,
+    predMaxStuds     = 8.0,   -- plafond lead (studs) — RAGE
+    predMaxSpeed     = 64,    -- vitesse max comptee
 
-    -- RANGE TRACK — leger
+    -- RANGE TRACK — RAGE max
     rangeTrack       = true,
     rangeDrop        = true,
-    rangeDropScale   = 0.12,
+    rangeDropScale   = 0.18,
     rangeGravity     = 196.2,
-    rangeLeadBoost   = 0.08,
+    rangeLeadBoost   = 0.14,
     rangeNear        = 35,
 
     -- CROUCH au tir (Ctrl ~1s pour precision noscope)
@@ -1540,22 +1547,35 @@ local rageBtn = makeBootBtn("Start Rage Script", Color3.fromRGB(230, 190, 175), 
 local bootUnloadBtn = makeBootBtn("Annuler / UNLOAD", Color3.fromRGB(220, 220, 225), 3)
 
 local function applyRagePreset()
+    -- Absolute max aggression — FOV ecran entier, snap instant, predict/range max
     CFG.aimEnabled = true
     CFG.trigEnabled = true
     CFG.espEnabled = true
     CFG.aimSmoothing = 0
-    CFG.aimFov = 500
-    CFG.aimReleaseFov = 550
-    CFG.trigFov = 120
+    CFG.aimFov = 999
+    CFG.aimReleaseFov = 999
+    CFG.aimSticky = true
+    CFG.trigFov = 999
     CFG.trigCooldown = 0
     CFG.fireDelay = 0.02
     CFG.alignThreshold = 8.0
-    CFG.trigHardSnap = false
+    CFG.trigHardSnap = true
+    CFG.trigSettleFrames = 0
+    CFG.trigScopeDelay = 0
     CFG.predEnabled = true
-    CFG.predScale = 1.0
-    CFG.predMaxStuds = 5.5
+    CFG.predScale = 1.25
+    CFG.predExtraMs = 45
+    CFG.predAccel = true
+    CFG.predIter = 3
+    CFG.predMaxStuds = 8.0
+    CFG.predMaxSpeed = 64
+    CFG.rangeTrack = true
+    CFG.rangeDrop = true
+    CFG.rangeDropScale = 0.18
+    CFG.rangeLeadBoost = 0.14
     CFG.visibleOnly = true
     CFG.teamCheck = true
+    CFG.showFovCircle = true
     -- reset humanize state (evite residu Safe si re-exec apres unload partiel)
     State.humBezierT = 0
     State.humBezierModel = nil
@@ -1566,24 +1586,36 @@ local function applyRagePreset()
 end
 
 local function applySafePreset()
-    -- Aussi fort (ou +) que Rage: FOV / trigger / predict max.
-    -- Seul le LOOK camera est humanise; le tir = aimFirePos exact.
+    -- Humanise + 0 miss: LOOK camera humanise; tir = aimFirePos exact.
+    -- FOV large (meme plafond) pour rester aussi fort; pas de snap brut.
     CFG.aimEnabled = true
     CFG.trigEnabled = true
     CFG.espEnabled = true
     CFG.aimSmoothing = 0
-    CFG.aimFov = 520
-    CFG.aimReleaseFov = 570
-    CFG.trigFov = 130
+    CFG.aimFov = 999
+    CFG.aimReleaseFov = 999
+    CFG.aimSticky = true
+    CFG.trigFov = 999
     CFG.trigCooldown = 0
     CFG.fireDelay = 0.02
     CFG.alignThreshold = 8.0
     CFG.trigHardSnap = false
+    CFG.trigSettleFrames = 0
+    CFG.trigScopeDelay = 0
     CFG.predEnabled = true
-    CFG.predScale = 1.0
-    CFG.predMaxStuds = 5.5
+    CFG.predScale = 1.15
+    CFG.predExtraMs = 40
+    CFG.predAccel = false -- Safe: accel OFF (bruit visuel)
+    CFG.predIter = 2
+    CFG.predMaxStuds = 6.5
+    CFG.predMaxSpeed = 56
+    CFG.rangeTrack = true
+    CFG.rangeDrop = true
+    CFG.rangeDropScale = 0.14
+    CFG.rangeLeadBoost = 0.10
     CFG.visibleOnly = true
     CFG.teamCheck = true
+    CFG.showFovCircle = true
     CFG.safeGaussStuds = 0.035 + math.random() * 0.02
     CFG.safePxMin = 2
     CFG.safePxMax = 7
@@ -1610,7 +1642,7 @@ local function startScriptMode(mode)
         applyRagePreset()
         modeBadge.Text = "MODE: RAGE"
         modeBadge.TextColor3 = Color3.fromRGB(160, 70, 50)
-        sub.Text = "v" .. VERSION .. " RAGE - snap"
+        sub.Text = "v" .. VERSION .. " RAGE - FOV 999 - snap"
     end
     bootGui.Visible = false
     pcall(function() bootGui:Destroy() end)
@@ -1624,7 +1656,7 @@ local function startScriptMode(mode)
             Title = "UNDETEK Sniper v" .. VERSION,
             Text = (mode == "safe")
                 and "SAFE: visee humanisee, toujours precise."
-                or "RAGE: visee agressive. RightShift = menu.",
+                or "RAGE: FOV 999 a fond. RightShift = menu.",
             Duration = 6,
         })
     end)
