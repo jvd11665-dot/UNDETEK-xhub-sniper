@@ -1,7 +1,7 @@
 ﻿# UNDETEK xhub — Sniper Duels
 
-Free standalone script · open source · non-obfusqué. No hub. No key.
-PlaceId `109397169461300` · **v3.8**
+Free standalone script · build protégé (obfusqué). No hub. No key.
+PlaceId `109397169461300` · **v5.0**
 
 [-- UNDETEK xhub Supported Games --]
 [+] Sniper Duels
