@@ -1,22 +1,22 @@
 ﻿# UNDETEK xhub — Sniper Duels
 
 Standalone scripts · No hub · No key.
-PlaceId `109397169461300` · **Combat v8.11** · **Autofarm v1.0**
+PlaceId `109397169461300` · **Combat v8.12** · **Autofarm v1.0**
 
 [-- UNDETEK xhub Supported Games --]
 [+] Sniper Duels
 
 [-- Two scripts (separated) --]
-[+] `script.lua` — **combat only** v8.11 (aim / trigger / ESP / predict / dodge / slide / hunt / knife / reload)
+[+] `script.lua` — **combat only** v8.12 (aim / trigger / ESP / clear view / hunt / knife / reload)
 [+] `autofarm.lua` **v1.1** — **lobby queue loop** (PLAY DUELS → 1v1 only → QUEUE → RETURN)
     Soft PlaceId (lobby UI OK), robust button find/click, debug toasts + F9 logs
 
-[-- Combat v8.11 — reload + ADS loin + couteau --]
+[-- Combat v8.12 — sans viseur + reload + couteau --]
 [+] Boot : Start Safe Script | Start Rage Script (RightShift menu)
+[+] **Sans scope / viseur** — GUI + mesh lunette masqués, vue sniper claire
 [+] **Auto-reload** — StartReload / R quand chargeur vide
-[+] **ADS loin** — hold clic droit + Aiming avant de se présenter (≥40)
 [+] **Couteau** — touche 2 au contact (≤12) · touche 1 sniper en reculant (≥16)
-[+] Hunt + dodge stables (feeling v8.10 / v8.5) · clearScope Rage
+[+] Hunt + dodge stables · Aiming sans overlay noir
 [+] Slide · respawn FOV · Predict · ESP · memory locale Xeno
 
 [-- Autofarm v1.0 — how to use --]
@@ -40,14 +40,14 @@ MOBILE: Delta, Codex
 [-- Links --]
 GitHub: https://github.com/jvd11665-dot/UNDETEK-xhub-sniper
 + info: https://github.com/jvd11665-dot/UNDETEK-xhub-sniper
-Combat raw: https://raw.githubusercontent.com/jvd11665-dot/UNDETEK-xhub-sniper/main/script.lua?v=811
+Combat raw: https://raw.githubusercontent.com/jvd11665-dot/UNDETEK-xhub-sniper/main/script.lua?v=812
 Autofarm raw: https://raw.githubusercontent.com/jvd11665-dot/UNDETEK-xhub-sniper/main/autofarm.lua
 Discord: https://discord.gg/cgRsTMUa9J
 Site: https://xhub.blog/library#/games/sniper-duels
 
 [-- Loadstring combat --]
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/jvd11665-dot/UNDETEK-xhub-sniper/main/script.lua?v=811"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/jvd11665-dot/UNDETEK-xhub-sniper/main/script.lua?v=812"))()
 ```
 
 [-- Loadstring autofarm (lobby) --]
